@@ -19,7 +19,10 @@ impl Headless {
     pub fn new(width: u32, height: u32) -> Self {
         Self {
             viewport: Size { width, height },
-            frame_size: Size { width: 0, height: 0 },
+            frame_size: Size {
+                width: 0,
+                height: 0,
+            },
             events: VecDeque::new(),
             pixels: Vec::new(),
             digest: hex(fnv1a(&[])),

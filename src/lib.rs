@@ -139,20 +139,90 @@ const fn caps(multi_window: bool, lifecycle: bool, dpi_scale: f32) -> Capabiliti
 // `Scaffold` = a known emitter with a registry row, no runtime adapter yet.
 // `Planned` = no dedicated target emitter yet. Neither is implemented.
 const TARGET_SPECS: [PlatformSpec; 14] = [
-    PlatformSpec { name: "android", emitter: "native", capabilities: caps(false, true, 2.0), status: Status::Planned },
-    PlatformSpec { name: "ios", emitter: "native", capabilities: caps(false, true, 2.0), status: Status::Planned },
-    PlatformSpec { name: "harmony-mobile", emitter: "native", capabilities: caps(false, true, 2.0), status: Status::Planned },
-    PlatformSpec { name: "harmony-pc", emitter: "native", capabilities: caps(true, false, 1.0), status: Status::Planned },
-    PlatformSpec { name: "windows", emitter: "native", capabilities: caps(true, false, 1.0), status: Status::Planned },
-    PlatformSpec { name: "macos", emitter: "native", capabilities: caps(true, false, 1.0), status: Status::Planned },
-    PlatformSpec { name: "linux", emitter: "native", capabilities: caps(true, false, 1.0), status: Status::Planned },
-    PlatformSpec { name: "wechat", emitter: "wechat", capabilities: caps(false, true, 2.0), status: Status::Scaffold },
-    PlatformSpec { name: "alipay", emitter: "alipay", capabilities: caps(false, true, 2.0), status: Status::Scaffold },
-    PlatformSpec { name: "qq", emitter: "qq", capabilities: caps(false, true, 2.0), status: Status::Scaffold },
-    PlatformSpec { name: "douyin", emitter: "douyin", capabilities: caps(false, true, 2.0), status: Status::Scaffold },
-    PlatformSpec { name: "baidu", emitter: "baidu", capabilities: caps(false, true, 2.0), status: Status::Scaffold },
-    PlatformSpec { name: "kuaishou", emitter: "kuaishou", capabilities: caps(false, true, 2.0), status: Status::Scaffold },
-    PlatformSpec { name: "web", emitter: "web", capabilities: caps(false, true, 1.0), status: Status::Scaffold },
+    PlatformSpec {
+        name: "android",
+        emitter: "native",
+        capabilities: caps(false, true, 2.0),
+        status: Status::Planned,
+    },
+    PlatformSpec {
+        name: "ios",
+        emitter: "native",
+        capabilities: caps(false, true, 2.0),
+        status: Status::Planned,
+    },
+    PlatformSpec {
+        name: "harmony-mobile",
+        emitter: "native",
+        capabilities: caps(false, true, 2.0),
+        status: Status::Planned,
+    },
+    PlatformSpec {
+        name: "harmony-pc",
+        emitter: "native",
+        capabilities: caps(true, false, 1.0),
+        status: Status::Planned,
+    },
+    PlatformSpec {
+        name: "windows",
+        emitter: "native",
+        capabilities: caps(true, false, 1.0),
+        status: Status::Planned,
+    },
+    PlatformSpec {
+        name: "macos",
+        emitter: "native",
+        capabilities: caps(true, false, 1.0),
+        status: Status::Planned,
+    },
+    PlatformSpec {
+        name: "linux",
+        emitter: "native",
+        capabilities: caps(true, false, 1.0),
+        status: Status::Planned,
+    },
+    PlatformSpec {
+        name: "wechat",
+        emitter: "wechat",
+        capabilities: caps(false, true, 2.0),
+        status: Status::Scaffold,
+    },
+    PlatformSpec {
+        name: "alipay",
+        emitter: "alipay",
+        capabilities: caps(false, true, 2.0),
+        status: Status::Scaffold,
+    },
+    PlatformSpec {
+        name: "qq",
+        emitter: "qq",
+        capabilities: caps(false, true, 2.0),
+        status: Status::Scaffold,
+    },
+    PlatformSpec {
+        name: "douyin",
+        emitter: "douyin",
+        capabilities: caps(false, true, 2.0),
+        status: Status::Scaffold,
+    },
+    PlatformSpec {
+        name: "baidu",
+        emitter: "baidu",
+        capabilities: caps(false, true, 2.0),
+        status: Status::Scaffold,
+    },
+    PlatformSpec {
+        name: "kuaishou",
+        emitter: "kuaishou",
+        capabilities: caps(false, true, 2.0),
+        status: Status::Scaffold,
+    },
+    PlatformSpec {
+        name: "web",
+        emitter: "web",
+        capabilities: caps(false, true, 1.0),
+        status: Status::Scaffold,
+    },
 ];
 
 /// The 14 target platforms named by ADAPTER_CONTRACT.md, one unique row each.

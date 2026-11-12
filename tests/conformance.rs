@@ -75,7 +75,10 @@ fn three_consecutive_errors_degrade_to_headless() {
         assert!(adapter.present(frame(1, 1, &pixels)).is_err());
         consecutive_errors += 1;
     }
-    assert_eq!(consecutive_errors, 3, "three consecutive Errs are representable");
+    assert_eq!(
+        consecutive_errors, 3,
+        "three consecutive Errs are representable"
+    );
     assert_eq!(adapter.name(), "flaky");
 
     // The kernel swaps in the verified headless adapter; the app keeps running.
@@ -198,7 +201,11 @@ fn headless_rejects_wrong_frame_length() {
         host.present(frame(2, 1, &[0u8; 9])),
         Err(AdapterError::InvalidFrame)
     );
-    assert_eq!(host.digest(), before, "a rejected frame never mutates state");
+    assert_eq!(
+        host.digest(),
+        before,
+        "a rejected frame never mutates state"
+    );
     assert_eq!(host.frame().pixels, &[]);
 
     assert_eq!(host.present(frame(2, 1, &[0u8; 8])), Ok(()));
