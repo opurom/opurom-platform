@@ -1,0 +1,13 @@
+[
+  {"id":0,"role":"none","label":"","bounds":[0,0,320,240],"hidden":false},
+  {"id":1,"role":"text","label":"Hello","bounds":[4,4,60,16],"hidden":false},
+  {"id":2,"role":"heading","label":"Big","bounds":[4,22,72,31],"hidden":false},
+  {"id":3,"role":"button","label":"Go","bounds":[4,55,48,38],"hidden":false},
+  {"id":4,"role":"image","label":"Logo","bounds":[4,95,64,71],"hidden":false},
+  {"id":5,"role":"checkbox","label":"Accept","bounds":[4,168,16,17],"hidden":false},
+  {"id":6,"role":"slider","label":"","bounds":[4,187,120,8],"hidden":false},
+  {"id":7,"role":"checkbox","label":"","bounds":[4,197,36,22],"hidden":false},
+  {"id":8,"role":"button","label":"Custom","bounds":[4,221,72,15],"hidden":false},
+  {"id":9,"role":"none","label":"Panel","bounds":[4,208,40,30],"hidden":true},
+  {"id":10,"role":"text","label":"Hidden","bounds":[4,208,40,30],"hidden":true}
+]

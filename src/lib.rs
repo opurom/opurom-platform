@@ -2,13 +2,15 @@
 //!
 //! `Headless` is the v0.1 reference adapter and conformance oracle; R3 adds
 //! `Terminal`. R5 adds the macOS-only `MacHost` with a real AppKit/CAMetalLayer
-//! host descriptor, a headlessly verifiable PNG path and `WindowSet`. The
-//! AppKit/CoreGraphics dependencies are target-scoped, so Linux CI builds the
-//! ABI and the cross-platform hosts without AppKit. OS-native adapters for
-//! Windows/Linux/Harmony, native widget trees and GPU presentation remain R6+.
+//! host descriptor, a headlessly verifiable PNG path and `WindowSet`. R8 adds
+//! compile-verified Win32/X11 window hosts and macOS accessibility posting.
+//! The AppKit/CoreGraphics dependencies are target-scoped, so Linux CI builds
+//! the ABI and the cross-platform hosts without AppKit. Native widget trees,
+//! GPU presentation, Wayland and HarmonyOS remain R9+.
 
 use std::fmt;
 
+mod a11y;
 mod headless;
 mod pixel;
 mod png;
@@ -21,7 +23,15 @@ mod window_set;
 mod appkit;
 #[cfg(target_os = "macos")]
 mod core_graphics_bridge;
+#[cfg(target_os = "windows")]
+mod win32;
+#[cfg(target_os = "linux")]
+mod x11;
 
+pub use a11y::{
+    map_a11y_tree, parse_a11y_json, post_a11y_tree, A11yNode, A11yPost, AxElement, AxRole,
+    DEFAULT_A11Y_TREE, SKIP_A11Y_ENV,
+};
 pub use headless::Headless;
 pub use pixel::{compare_rgba_to_ppm, PixelComparison, CHANNEL_TOLERANCE, MISMATCH_BUDGET_PERCENT};
 pub use png::frame_to_png;
@@ -35,6 +45,10 @@ pub use appkit::{
     capture_window, draw_and_capture, window_availability, write_png, CapturedWindow, MacHost,
     MacHostDescriptor, MacWindow, WindowUnavailable,
 };
+#[cfg(target_os = "windows")]
+pub use win32::Win32Host;
+#[cfg(target_os = "linux")]
+pub use x11::X11Host;
 
 /// Logical viewport size in pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

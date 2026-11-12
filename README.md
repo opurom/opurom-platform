@@ -1,4 +1,4 @@
-# opurom-platform - Platform Adapter ABI v0.1 + R7 live native window
+# opurom-platform - Platform Adapter ABI v0.1 + R8 native surfaces
 
 Independent Rust crate implementing the normative
 [ADAPTER_CONTRACT.md](../opurom-spec/ADAPTER_CONTRACT.md). The ABI, registry,
@@ -9,9 +9,10 @@ so Linux CI builds the crate without AppKit. R5 adds a real macOS `NSApplication
 a headlessly verifiable RGBA8-to-PNG path and deterministic multi-window state.
 R7 turns `open_window()` into a **tested entry point**: it opens a real AppKit
 window, captures the window's own pixels with `cacheDisplay(in:to:)` and
-compares them against the software renderer.
+compares them against the software renderer. R8 adds compile-verified Win32
+and X11 window hosts plus permission-aware macOS accessibility posting.
 
-## Status (honest, R7)
+## Status (honest, R8)
 
 | name | emitter | status | gpu | native_embed | multi_window |
 | --- | --- | --- | --- | --- | --- |
@@ -37,7 +38,10 @@ compares them against the software renderer.
 each unique and each `Scaffold` or `Planned`; the `macos` target row remains
 `Planned`. `all_platforms()` is still the frozen v0.1 listing (`headless` + the
 14 targets = 15, one `Verified`), so the R2 regression oracle is unchanged. The
-`Verified` rows above are **host adapters**, not target emitters.
+`Verified` rows above are **host adapters**, not target emitters. The R8
+`Win32Host` and `X11Host` are compile-only host adapters behind their OS
+`cfg`s; they are deliberately absent from `host_platforms()` and the `windows`
+/ `linux` target rows stay `Planned` because no window was executed.
 `host_platforms()` / `--hosts` list `headless`, `terminal` and, on macOS only,
 `appkit`; other targets list only the two cross-platform hosts. `appkit` is
 also reachable through `spec_by_name("appkit")` on macOS.
@@ -53,11 +57,17 @@ The remaining target-row capability flags and `dpi_scale` values are nominal
 logical defaults, not measurements. No fps, device-matrix or benchmark claims
 are made.
 
-OS-native windows for Windows/Linux/Harmony, native widget embedding, full GPU
-UI rasterization, Vulkan/ANGLE/D3D backends, and real device conformance remain
-**R8+**. R7 does exercise a live GUI session, but only on macOS and only for the
-single AppKit host below; the Linux CI runner has no window server and always
-reports SKIP.
+R8 adds `src/win32.rs` and `src/x11.rs` as **COMPILED, NOT EXECUTED** OS
+adapters. `windows-sys = "=0.52.0"` is a Windows-only dependency, so macOS and
+Linux CI never need it; X11 uses raw `extern "C"` declarations with no X11
+library present on this host. Both cross-target `cargo check --all-targets`
+commands pass. No Windows binary is linked (no mingw linker), and no X11
+window is opened (no X server). Wayland, HarmonyOS, native widget embedding,
+full GPU UI rasterization, Vulkan/ANGLE/D3D backends and real device
+conformance remain **R9+**. R7 does exercise a live GUI session, but only on
+macOS and only for the single AppKit host below; the Linux CI runner has no
+window server and always reports SKIP. macOS a11y posting requires OS
+Accessibility permission.
 
 ## ABI summary
 
@@ -204,7 +214,8 @@ per-channel delta of **25**.
   the display profile; the tolerance absorbs the shift, it does not correct it.
 - **No native widget embedding.** `native_embed: true` reports the real
   `NSView`/`CAMetalLayer` host surface; no AppKit controls are embedded.
-- **No native windows on Windows, Linux or Harmony** (R8+), and no GPU
+- **No live Windows, Linux or Harmony window in R7**; R8 adds compile-only
+  Win32/X11 adapters, Harmony remains R9+. There is still no GPU
   rasterization or Metal drawable presentation (`gpu` stays `false`).
 
 ### Pure RGBA8 to PNG path
@@ -243,6 +254,34 @@ swaps in `Headless` and keeps the app alive. `tests/conformance.rs` demonstrates
 this with a `Flaky` mock adapter returning `Err(AdapterError::Backend(..))`
 three times before the headless fallback takes over.
 
+### R8 Windows, Linux and accessibility surfaces (compile-verified)
+
+- `Win32Host::open()` registers a wide-character class with `RegisterClassW`,
+  creates a window with `CreateWindowExW`, and `run()` pumps `GetMessageW` /
+  `TranslateMessage` / `DispatchMessageW`. `present()` converts RGBA8 to the
+  BGRA byte order of a top-down 32-bit `BI_RGB` DIB; `WM_PAINT` calls
+  `StretchDIBits`. `WM_DESTROY` calls `PostQuitMessage`. Key, tap and resize
+  messages become `InputEvent`s. The R8 shortcut is one window per process.
+- `X11Host::open()` calls `XOpenDisplay`, `XCreateSimpleWindow`, `XMapWindow`,
+  `XSelectInput` and `XFlush`; `present()` packs RGBA8 through the TrueColor
+  visual masks into an `XCreateImage` DIB and draws it with `XPutImage`.
+  `pump()` / `run()` use `XNextEvent`, and `close()` uses `XFreeGC`,
+  `XDestroyWindow` and `XCloseDisplay`. The raw Xlib FFI is linked only on
+  Linux; a 24/32-bit TrueColor visual is required at runtime.
+- Neither adapter was executed here. There is no Windows host or mingw linker
+  on this macOS machine, and there is no X server or X11 library for a Linux
+  window. The two target-scoped compile checks are the R8 evidence.
+- `--post-a11y [tree.json]` parses the renderer's deterministic R3 a11y JSON,
+  maps visible nodes to AX roles, labels and bottom-left frames, then posts
+  `NSAccessibilityElement`s with `NSAccessibilityPostNotification`. It checks
+  `AXIsProcessTrusted()` and `AXUIElementCreateApplication()` first. Denied
+  trust reports `SKIP AXIsProcessTrusted returned false: ...`; other OS/API
+  failures report `FAIL`, never a fake `PASS`. `OPR_SKIP_A11Y=1` forces a
+  deterministic SKIP without any Accessibility API call.
+- R3 JSON has no parent ids, so R8 posts a flat AX group in pre-order. There is
+  no claim of a nested AX hierarchy, VoiceOver speech verification or native
+  widget embedding. The pure parser/mapping tests need no OS permission.
+
 ## Standard new-platform checklist
 
 1. Add a `PlatformSpec` row to `registry()` with the correct IR_SCHEMA.md emitter and
@@ -275,6 +314,12 @@ A missing path exits 2; a PNG/AppKit error exits 1 with the error on stderr.
 accepts `--ir <path>`, `--width <n>`, `--height <n>` and `--out <path>`, prints
 one `PASS`, `FAIL` or `SKIP` line and exits 0 for PASS and SKIP, 1 for FAIL.
 
+`--post-a11y [tree.json]` posts the R3 accessibility tree on macOS; without a
+path it uses the checked-in renderer-tree fixture. It prints
+`PASS a11y_nodes=N` only after real AppKit/AX calls, or `SKIP <concrete reason>`
+when Accessibility trust is denied or `OPR_SKIP_A11Y=1` is set. A parse or API
+failure prints `FAIL <reason>` and exits 1. PASS and SKIP exit 0.
+
 ```text
 name | emitter | status | gpu | native_embed | multi_window
 headless | headless | Verified | false | false | false
@@ -292,13 +337,18 @@ cargo test --offline
 cargo run --quiet --offline -- --hosts
 cargo run --quiet --offline -- --png /tmp/opurom-r5.png
 cargo run --quiet --offline -- --verify-window --out /tmp/opurom-window.png
+cargo run --quiet --offline -- --post-a11y
+cargo check --target x86_64-pc-windows-gnu --all-targets
+cargo check --target x86_64-unknown-linux-gnu --all-targets
 ```
 
-All 30 R6 tests stay green; R7 adds 14 tests (the live-window pixel
-verification, the `OPR_SKIP_WINDOW=1` SKIP path, the documented tolerance, the
-PPM reader, the tolerant pixel comparison and the `CGImage` bridge). `cargo
-fmt --all`, `cargo build --offline` and `cargo test --offline` produce zero
-warnings on macOS and on the Linux CI target.
+All **44 R7 tests stay green**. R8 adds five macOS tests (three pure a11y
+parser/mapping tests and two CLI verdict tests), so `cargo test --offline`
+runs **49 tests** on macOS. The Win32 and X11 modules each add two pure unit
+tests that are compiled, not executed, by their target's `--all-targets`
+check. `cargo fmt --all`, `cargo build --offline` and `cargo test --offline`
+produce zero warnings on macOS; both cross-target checks are compile-only and
+produce no warnings. No Windows `.exe` or Linux X11 binary is linked here.
 
 On a host with a GUI session the `--verify-window` run reports `PASS` with the
 measured numbers. On a headless host it reports `SKIP <reason>` and exits 0.

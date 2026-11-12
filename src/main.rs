@@ -1,6 +1,9 @@
 #[cfg(target_os = "macos")]
 use opurom_platform::Verification;
-use opurom_platform::{frame_to_png, host_platforms, registry, FrameView};
+use opurom_platform::{
+    frame_to_png, host_platforms, parse_a11y_json, post_a11y_tree, registry, FrameView,
+    DEFAULT_A11Y_TREE,
+};
 
 #[cfg(target_os = "macos")]
 use opurom_platform::{
@@ -246,8 +249,48 @@ fn verify_window(_args: &[String]) -> i32 {
     0
 }
 
+/// Post the R3 a11y tree to the macOS screen-reader APIs. `PASS` and a
+/// concrete `SKIP` exit 0; a mapping or OS API failure is a `FAIL`.
+fn post_a11y(args: &[String]) -> i32 {
+    let supplied = args
+        .iter()
+        .position(|arg| arg == "--post-a11y")
+        .and_then(|index| args.get(index + 1))
+        .filter(|path| !path.starts_with("--"));
+    let json = match supplied {
+        Some(path) => match std::fs::read_to_string(path) {
+            Ok(json) => json,
+            Err(error) => {
+                println!("SKIP cannot read the a11y tree {path}: {error}");
+                return 0;
+            }
+        },
+        None => DEFAULT_A11Y_TREE.to_string(),
+    };
+    let nodes = match parse_a11y_json(&json) {
+        Ok(nodes) => nodes,
+        Err(error) => {
+            println!("FAIL {error}");
+            return 1;
+        }
+    };
+    match post_a11y_tree(&nodes) {
+        Ok(result) => {
+            println!("{}", result.report());
+            0
+        }
+        Err(error) => {
+            println!("FAIL {error}");
+            1
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|arg| arg == "--post-a11y") {
+        std::process::exit(post_a11y(&args));
+    }
     if let Some(index) = args.iter().position(|arg| arg == "--png") {
         let Some(path) = args.get(index + 1) else {
             eprintln!("--png requires an output path");
