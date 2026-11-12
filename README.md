@@ -59,15 +59,17 @@ are made.
 
 R8 adds `src/win32.rs` and `src/x11.rs` as **COMPILED, NOT EXECUTED** OS
 adapters. `windows-sys = "=0.52.0"` is a Windows-only dependency, so macOS and
-Linux CI never need it; X11 uses raw `extern "C"` declarations with no X11
-library present on this host. Both cross-target `cargo check --all-targets`
-commands pass. No Windows binary is linked (no mingw linker), and no X11
-window is opened (no X server). Wayland, HarmonyOS, native widget embedding,
-full GPU UI rasterization, Vulkan/ANGLE/D3D backends and real device
-conformance remain **R9+**. R7 does exercise a live GUI session, but only on
-macOS and only for the single AppKit host below; the Linux CI runner has no
-window server and always reports SKIP. macOS a11y posting requires OS
-Accessibility permission.
+Linux CI never need it. X11 resolves `libX11.so.6`/`libX11.so` and its Xlib
+symbols at runtime with plain libc `dlopen`/`dlsym`; there is **no `-lX11`
+link requirement** and no X11 headers or development libraries are needed to
+build. A missing runtime library returns a documented `X11 unavailable` error.
+Both cross-target `cargo check --all-targets` commands pass. No Windows binary
+is linked (no mingw linker), and no X11 window is opened (no X server).
+Wayland, HarmonyOS, native widget embedding, full GPU UI rasterization,
+Vulkan/ANGLE/D3D backends and real device conformance remain **R9+**. R7 does
+exercise a live GUI session, but only on macOS and only for the single AppKit
+host below; the Linux CI runner has no window server and always reports SKIP.
+macOS a11y posting requires OS Accessibility permission.
 
 ## ABI summary
 
@@ -262,15 +264,20 @@ three times before the headless fallback takes over.
   BGRA byte order of a top-down 32-bit `BI_RGB` DIB; `WM_PAINT` calls
   `StretchDIBits`. `WM_DESTROY` calls `PostQuitMessage`. Key, tap and resize
   messages become `InputEvent`s. The R8 shortcut is one window per process.
-- `X11Host::open()` calls `XOpenDisplay`, `XCreateSimpleWindow`, `XMapWindow`,
-  `XSelectInput` and `XFlush`; `present()` packs RGBA8 through the TrueColor
-  visual masks into an `XCreateImage` DIB and draws it with `XPutImage`.
-  `pump()` / `run()` use `XNextEvent`, and `close()` uses `XFreeGC`,
-  `XDestroyWindow` and `XCloseDisplay`. The raw Xlib FFI is linked only on
-  Linux; a 24/32-bit TrueColor visual is required at runtime.
+- `X11Host::open()` dynamically resolves and calls `XOpenDisplay`,
+  `XCreateSimpleWindow`, `XMapWindow`, `XSelectInput` and `XFlush`;
+  `present()` packs RGBA8 through the TrueColor visual masks into an
+  `XCreateImage` DIB and draws it with `XPutImage`. `pump()` / `run()` use
+  `XNextEvent`, and `close()` uses `XFreeGC`, `XDestroyWindow` and
+  `XCloseDisplay`. Symbols come from `dlopen`/`dlsym` at runtime only when a
+  window is opened, so the default Linux build has no `-lX11` link requirement
+  and needs no X11 headers. A missing `libX11.so.6` returns
+  `X11 unavailable: dlopen(...) failed`; a missing symbol returns
+  `X11 unavailable: libX11 is missing a required Xlib symbol`. A 24/32-bit
+  TrueColor visual is also required at runtime.
 - Neither adapter was executed here. There is no Windows host or mingw linker
-  on this macOS machine, and there is no X server or X11 library for a Linux
-  window. The two target-scoped compile checks are the R8 evidence.
+  on this macOS machine, and there is no X server for a Linux window. The two
+  target-scoped compile checks are the R8 evidence.
 - `--post-a11y [tree.json]` parses the renderer's deterministic R3 a11y JSON,
   maps visible nodes to AX roles, labels and bottom-left frames, then posts
   `NSAccessibilityElement`s with `NSAccessibilityPostNotification`. It checks
@@ -344,11 +351,13 @@ cargo check --target x86_64-unknown-linux-gnu --all-targets
 
 All **44 R7 tests stay green**. R8 adds five macOS tests (three pure a11y
 parser/mapping tests and two CLI verdict tests), so `cargo test --offline`
-runs **49 tests** on macOS. The Win32 and X11 modules each add two pure unit
-tests that are compiled, not executed, by their target's `--all-targets`
-check. `cargo fmt --all`, `cargo build --offline` and `cargo test --offline`
-produce zero warnings on macOS; both cross-target checks are compile-only and
-produce no warnings. No Windows `.exe` or Linux X11 binary is linked here.
+runs **49 tests** on macOS. Win32 adds two and X11 adds three pure unit tests
+that are compiled, not executed, by their target's `--all-targets` check. The
+Linux source has no `#[link(name = "X11")]` attribute and therefore no
+`-lX11` link requirement; Xlib is loaded only by `X11Host::open()`. `cargo
+fmt --all`, `cargo build --offline` and `cargo test --offline` produce zero
+warnings on macOS; both cross-target checks are compile-only and produce no
+warnings. No Windows `.exe` or Linux X11 binary is linked here.
 
 On a host with a GUI session the `--verify-window` run reports `PASS` with the
 measured numbers. On a headless host it reports `SKIP <reason>` and exits 0.

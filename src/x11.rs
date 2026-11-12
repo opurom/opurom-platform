@@ -1,10 +1,12 @@
 //! X11 window host (R8_ADDENDUM.md section 3).
 //!
-//! The Xlib calls are raw `extern "C"` declarations. This host is only
-//! compile-checked: the R8 macOS host has no X server or X11 development
-//! libraries, so no X11 window is opened here. A 24/32-bit TrueColor visual
-//! is required; RGBA8 is packed through the visual's masks into an `XImage`
-//! and presented with `XPutImage`.
+//! Xlib is loaded at runtime with `dlopen`/`dlsym` instead of a link-time
+//! `-lX11` dependency, so a Linux CI runner needs neither X11 headers nor X11
+//! development libraries to build this crate. A missing `libX11.so.6` or a
+//! missing symbol is a documented `AdapterError`, never a fake window. This
+//! host is only compile-checked here: the R8 macOS host has no X server. A
+//! 24/32-bit TrueColor visual is required; RGBA8 is packed through the
+//! visual's masks into an `XImage` and presented with `XPutImage`.
 
 use std::collections::VecDeque;
 use std::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void};
@@ -162,6 +164,46 @@ union XEvent {
     pad: [c_long; 24],
 }
 
+type XOpenDisplayFn = unsafe extern "C" fn(*const c_char) -> *mut Display;
+type XDefaultScreenFn = unsafe extern "C" fn(*mut Display) -> c_int;
+type XRootWindowFn = unsafe extern "C" fn(*mut Display, c_int) -> Window;
+type XBlackPixelFn = unsafe extern "C" fn(*mut Display, c_int) -> c_ulong;
+type XWhitePixelFn = unsafe extern "C" fn(*mut Display, c_int) -> c_ulong;
+type XDefaultVisualFn = unsafe extern "C" fn(*mut Display, c_int) -> *mut Visual;
+type XDefaultDepthFn = unsafe extern "C" fn(*mut Display, c_int) -> c_int;
+type XCreateSimpleWindowFn = unsafe extern "C" fn(
+    *mut Display,
+    Window,
+    c_int,
+    c_int,
+    c_uint,
+    c_uint,
+    c_uint,
+    c_ulong,
+    c_ulong,
+) -> Window;
+type XCreateGCFn = unsafe extern "C" fn(*mut Display, Drawable, c_ulong, *mut XGCValues) -> GC;
+type XFreeGCFn = unsafe extern "C" fn(*mut Display, GC) -> c_int;
+type XDestroyWindowFn = unsafe extern "C" fn(*mut Display, Window) -> c_int;
+type XSelectInputFn = unsafe extern "C" fn(*mut Display, Window, c_long) -> c_int;
+type XMapWindowFn = unsafe extern "C" fn(*mut Display, Window) -> c_int;
+type XFlushFn = unsafe extern "C" fn(*mut Display) -> c_int;
+type XNextEventFn = unsafe extern "C" fn(*mut Display, *mut XEvent) -> c_int;
+type XCloseDisplayFn = unsafe extern "C" fn(*mut Display) -> c_int;
+type XPutImageFn = unsafe extern "C" fn(
+    *mut Display,
+    Drawable,
+    GC,
+    *mut XImage,
+    c_int,
+    c_int,
+    c_int,
+    c_int,
+    c_uint,
+    c_uint,
+) -> c_int;
+type XFreeFn = unsafe extern "C" fn(*mut c_void) -> c_int;
+
 const ZPIXMAP: c_int = 2;
 const TRUE_COLOR: c_int = 4;
 const KEY_PRESS: c_int = 2;
@@ -175,65 +217,115 @@ const KEY_RELEASE_MASK: c_long = 1 << 1;
 const BUTTON_PRESS_MASK: c_long = 1 << 2;
 const EXPOSURE_MASK: c_long = 1 << 15;
 const STRUCTURE_NOTIFY_MASK: c_long = 1 << 17;
+const RTLD_NOW: c_int = 2;
+const RTLD_LOCAL: c_int = 0;
+const X11_SONAMES: [&[u8]; 2] = [b"libX11.so.6\0", b"libX11.so\0"];
+const X11_LOAD_ERROR: &str = "X11 unavailable: dlopen(libX11.so.6/libX11.so) failed; install the X11 runtime or use a headless adapter";
+const X11_SYMBOL_ERROR: &str = "X11 unavailable: libX11 is missing a required Xlib symbol";
 
-#[link(name = "X11")]
+// Modern glibc exports these from libc; there is deliberately no -ldl link.
 extern "C" {
-    fn XOpenDisplay(name: *const c_char) -> *mut Display;
-    fn XDefaultScreen(display: *mut Display) -> c_int;
-    fn XRootWindow(display: *mut Display, screen: c_int) -> Window;
-    fn XBlackPixel(display: *mut Display, screen: c_int) -> c_ulong;
-    fn XWhitePixel(display: *mut Display, screen: c_int) -> c_ulong;
-    fn XDefaultVisual(display: *mut Display, screen: c_int) -> *mut Visual;
-    fn XDefaultDepth(display: *mut Display, screen: c_int) -> c_int;
-    fn XCreateSimpleWindow(
-        display: *mut Display,
-        parent: Window,
-        x: c_int,
-        y: c_int,
-        width: c_uint,
-        height: c_uint,
-        border_width: c_uint,
-        border: c_ulong,
-        background: c_ulong,
-    ) -> Window;
-    fn XCreateGC(
-        display: *mut Display,
-        drawable: Drawable,
-        value_mask: c_ulong,
-        values: *mut XGCValues,
-    ) -> GC;
-    fn XFreeGC(display: *mut Display, gc: GC) -> c_int;
-    fn XDestroyWindow(display: *mut Display, window: Window) -> c_int;
-    fn XSelectInput(display: *mut Display, window: Window, event_mask: c_long) -> c_int;
-    fn XMapWindow(display: *mut Display, window: Window) -> c_int;
-    fn XFlush(display: *mut Display) -> c_int;
-    fn XNextEvent(display: *mut Display, event: *mut XEvent) -> c_int;
-    fn XCloseDisplay(display: *mut Display) -> c_int;
-    fn XCreateImage(
-        display: *mut Display,
-        visual: *mut Visual,
-        depth: c_uint,
-        format: c_int,
-        offset: c_int,
-        data: *mut c_char,
-        width: c_uint,
-        height: c_uint,
-        bitmap_pad: c_int,
-        bytes_per_line: c_int,
-    ) -> *mut XImage;
-    fn XPutImage(
-        display: *mut Display,
-        drawable: Drawable,
-        gc: GC,
-        image: *mut XImage,
-        src_x: c_int,
-        src_y: c_int,
-        dest_x: c_int,
-        dest_y: c_int,
-        width: c_uint,
-        height: c_uint,
-    ) -> c_int;
-    fn XFree(data: *mut c_void) -> c_int;
+    fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
+    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    fn dlerror() -> *mut c_char;
+    fn dlclose(handle: *mut c_void) -> c_int;
+}
+
+/// All Xlib entry points resolved from one runtime library handle.
+struct Xlib {
+    handle: *mut c_void,
+    open_display: XOpenDisplayFn,
+    default_screen: XDefaultScreenFn,
+    root_window: XRootWindowFn,
+    black_pixel: XBlackPixelFn,
+    white_pixel: XWhitePixelFn,
+    default_visual: XDefaultVisualFn,
+    default_depth: XDefaultDepthFn,
+    create_simple_window: XCreateSimpleWindowFn,
+    create_gc: XCreateGCFn,
+    free_gc: XFreeGCFn,
+    destroy_window: XDestroyWindowFn,
+    select_input: XSelectInputFn,
+    map_window: XMapWindowFn,
+    flush: XFlushFn,
+    next_event: XNextEventFn,
+    close_display: XCloseDisplayFn,
+    create_image: XImageCreateFn,
+    put_image: XPutImageFn,
+    free: XFreeFn,
+}
+
+impl Xlib {
+    fn load() -> Result<Self, AdapterError> {
+        let handle = unsafe { open_x11_library() };
+        if handle.is_null() {
+            return Err(AdapterError::Backend(X11_LOAD_ERROR));
+        }
+        let loaded = unsafe { Self::from_handle(handle) };
+        if loaded.is_err() {
+            // SAFETY: no Xlib value owns the handle after a failed resolution.
+            unsafe { dlclose(handle) };
+        }
+        loaded
+    }
+
+    unsafe fn from_handle(handle: *mut c_void) -> Result<Self, AdapterError> {
+        Ok(Self {
+            handle,
+            open_display: symbol(handle, b"XOpenDisplay\0")?,
+            default_screen: symbol(handle, b"XDefaultScreen\0")?,
+            root_window: symbol(handle, b"XRootWindow\0")?,
+            black_pixel: symbol(handle, b"XBlackPixel\0")?,
+            white_pixel: symbol(handle, b"XWhitePixel\0")?,
+            default_visual: symbol(handle, b"XDefaultVisual\0")?,
+            default_depth: symbol(handle, b"XDefaultDepth\0")?,
+            create_simple_window: symbol(handle, b"XCreateSimpleWindow\0")?,
+            create_gc: symbol(handle, b"XCreateGC\0")?,
+            free_gc: symbol(handle, b"XFreeGC\0")?,
+            destroy_window: symbol(handle, b"XDestroyWindow\0")?,
+            select_input: symbol(handle, b"XSelectInput\0")?,
+            map_window: symbol(handle, b"XMapWindow\0")?,
+            flush: symbol(handle, b"XFlush\0")?,
+            next_event: symbol(handle, b"XNextEvent\0")?,
+            close_display: symbol(handle, b"XCloseDisplay\0")?,
+            create_image: symbol(handle, b"XCreateImage\0")?,
+            put_image: symbol(handle, b"XPutImage\0")?,
+            free: symbol(handle, b"XFree\0")?,
+        })
+    }
+}
+
+impl Drop for Xlib {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            // SAFETY: the handle came from dlopen and is closed exactly once.
+            unsafe { dlclose(self.handle) };
+            self.handle = null_mut();
+        }
+    }
+}
+
+unsafe fn open_x11_library() -> *mut c_void {
+    for name in X11_SONAMES {
+        let handle = dlopen(name.as_ptr().cast::<c_char>(), RTLD_NOW | RTLD_LOCAL);
+        if !handle.is_null() {
+            return handle;
+        }
+        let _ = dlerror();
+    }
+    null_mut()
+}
+
+unsafe fn symbol<T>(handle: *mut c_void, name: &[u8]) -> Result<T, AdapterError> {
+    let _ = dlerror();
+    let pointer = dlsym(handle, name.as_ptr().cast::<c_char>());
+    let error = dlerror();
+    if pointer.is_null() || !error.is_null() {
+        return Err(AdapterError::Backend(X11_SYMBOL_ERROR));
+    }
+    // POSIX permits a void* symbol address to be used as a function pointer;
+    // on Linux both representations have the same size.
+    Ok(std::mem::transmute_copy::<*mut c_void, T>(&pointer))
 }
 
 fn checked_len(width: u32, height: u32) -> Result<usize, AdapterError> {
@@ -269,20 +361,20 @@ fn rgba_to_xpixel(pixels: &[u8], masks: (u32, u32, u32, u32)) -> Result<Vec<u8>,
     Ok(packed)
 }
 
-unsafe fn destroy_image(image: *mut XImage) {
+unsafe fn destroy_image(lib: &Xlib, image: *mut XImage) {
     if image.is_null() {
         return;
     }
     if let Some(destroy) = (*image).f.destroy_image {
         destroy(image);
     } else {
-        XFree((*image).data.cast::<c_void>());
-        XFree(image.cast::<c_void>());
+        (lib.free)((*image).data.cast::<c_void>());
+        (lib.free)(image.cast::<c_void>());
     }
 }
 
 /// A live X11 window host. `pump()` consumes one `XNextEvent`; `run()` pumps
-/// until the window is destroyed.
+/// until the window is destroyed. Xlib is loaded only when `open()` is called.
 pub struct X11Host {
     display: *mut Display,
     window: Window,
@@ -295,12 +387,14 @@ pub struct X11Host {
     last_frame: Vec<u8>,
     last_size: Size,
     closed: bool,
+    lib: Xlib,
 }
 
 impl X11Host {
     pub fn open(width: u32, height: u32) -> Result<Self, AdapterError> {
         checked_len(width, height)?;
-        let display = unsafe { XOpenDisplay(null()) };
+        let lib = Xlib::load()?;
+        let display = unsafe { (lib.open_display)(null()) };
         if display.is_null() {
             return Err(AdapterError::Backend(
                 "XOpenDisplay failed: DISPLAY is unset or no X server is reachable",
@@ -321,20 +415,23 @@ impl X11Host {
                 height: 0,
             },
             closed: false,
+            lib,
         };
-        let screen = unsafe { XDefaultScreen(display) };
-        let root = unsafe { XRootWindow(display, screen) };
-        let border = unsafe { XBlackPixel(display, screen) };
-        let background = unsafe { XWhitePixel(display, screen) };
+        let screen = unsafe { (host.lib.default_screen)(display) };
+        let root = unsafe { (host.lib.root_window)(display, screen) };
+        let border = unsafe { (host.lib.black_pixel)(display, screen) };
+        let background = unsafe { (host.lib.white_pixel)(display, screen) };
         host.window = unsafe {
-            XCreateSimpleWindow(display, root, 0, 0, width, height, 0, border, background)
+            (host.lib.create_simple_window)(
+                display, root, 0, 0, width, height, 0, border, background,
+            )
         };
         if host.window == 0 {
             host.close();
             return Err(AdapterError::Backend("XCreateSimpleWindow failed"));
         }
-        host.visual = unsafe { XDefaultVisual(display, screen) };
-        let depth = unsafe { XDefaultDepth(display, screen) };
+        host.visual = unsafe { (host.lib.default_visual)(display, screen) };
+        let depth = unsafe { (host.lib.default_depth)(display, screen) };
         if host.visual.is_null() || depth < 24 {
             host.close();
             return Err(AdapterError::Backend(
@@ -361,7 +458,7 @@ impl X11Host {
         }
         host.masks = (red, green, blue, 0xffff_ffff_u32 & !(red | green | blue));
         host.depth = depth as c_uint;
-        host.gc = unsafe { XCreateGC(display, host.window, 0, null_mut()) };
+        host.gc = unsafe { (host.lib.create_gc)(display, host.window, 0, null_mut()) };
         if host.gc.is_null() {
             host.close();
             return Err(AdapterError::Backend("XCreateGC failed"));
@@ -373,9 +470,9 @@ impl X11Host {
             | STRUCTURE_NOTIFY_MASK;
         // SAFETY: all handles came from the live Xlib display above.
         let ready = unsafe {
-            XSelectInput(display, host.window, mask) != 0
-                && XMapWindow(display, host.window) != 0
-                && XFlush(display) != 0
+            (host.lib.select_input)(display, host.window, mask) != 0
+                && (host.lib.map_window)(display, host.window) != 0
+                && (host.lib.flush)(display) != 0
         };
         if !ready {
             host.close();
@@ -392,19 +489,19 @@ impl X11Host {
         }
         // SAFETY: handles are null-checked and owned by this host.
         unsafe {
-            if !self.gc.is_null() {
-                XFreeGC(self.display, self.gc);
-                self.gc = null_mut();
-            }
-            if self.window != 0 {
-                XDestroyWindow(self.display, self.window);
-                self.window = 0;
-            }
             if !self.display.is_null() {
-                XCloseDisplay(self.display);
-                self.display = null_mut();
+                if !self.gc.is_null() {
+                    (self.lib.free_gc)(self.display, self.gc);
+                }
+                if self.window != 0 {
+                    (self.lib.destroy_window)(self.display, self.window);
+                }
+                (self.lib.close_display)(self.display);
             }
         }
+        self.gc = null_mut();
+        self.window = 0;
+        self.display = null_mut();
         self.closed = true;
     }
 
@@ -417,7 +514,7 @@ impl X11Host {
             .filter(|&row| row <= c_int::MAX as usize)
             .ok_or(AdapterError::InvalidFrame)? as c_int;
         let image = unsafe {
-            XCreateImage(
+            (self.lib.create_image)(
                 self.display,
                 self.visual,
                 self.depth,
@@ -453,7 +550,7 @@ impl X11Host {
                     info.data.cast::<u8>(),
                     pixels.len(),
                 );
-                let put = XPutImage(
+                let put = (self.lib.put_image)(
                     self.display,
                     self.window,
                     self.gc,
@@ -465,7 +562,7 @@ impl X11Host {
                     width,
                     height,
                 );
-                let flushed = XFlush(self.display);
+                let flushed = (self.lib.flush)(self.display);
                 if put == 0 {
                     Err(AdapterError::Backend("XPutImage failed"))
                 } else if flushed == 0 {
@@ -475,7 +572,7 @@ impl X11Host {
                 }
             }
         };
-        unsafe { destroy_image(image) };
+        unsafe { destroy_image(&self.lib, image) };
         result
     }
 
@@ -485,7 +582,7 @@ impl X11Host {
             return Err(AdapterError::Backend("the X11 display is closed"));
         }
         let mut event: XEvent = unsafe { std::mem::zeroed() };
-        unsafe { XNextEvent(self.display, &mut event) };
+        unsafe { (self.lib.next_event)(self.display, &mut event) };
         let kind = unsafe { event.kind };
         match kind {
             KEY_PRESS | KEY_RELEASE => {
@@ -588,8 +685,16 @@ impl Drop for X11Host {
 
 #[cfg(test)]
 mod tests {
-    use super::{checked_len, rgba_to_xpixel};
+    use super::{checked_len, rgba_to_xpixel, Xlib};
     use crate::AdapterError;
+
+    #[test]
+    fn runtime_loader_reports_missing_x11_or_resolves_all_symbols() {
+        match Xlib::load() {
+            Ok(lib) => assert!(!lib.handle.is_null()),
+            Err(error) => assert!(error.to_string().contains("X11 unavailable"), "{error}"),
+        }
+    }
 
     #[test]
     fn rgba_uses_the_visual_masks_in_native_byte_order() {
