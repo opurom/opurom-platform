@@ -1,14 +1,18 @@
 //! OPUROM platform adapter ABI v0.1 (normative: `opurom-spec/ADAPTER_CONTRACT.md`).
 //!
-//! Zero dependencies. Only `Headless` is implemented and Verified in v0.1; every
-//! OS-native / mini-program / web adapter, native widget embedding and GPU
-//! presentation are later rounds (R2+).
+//! Zero dependencies. `Headless` is the v0.1 reference adapter and conformance
+//! oracle; R3 adds `Terminal` as a second fully implemented, Verified host adapter.
+//! Both are thin host adapters demonstrating the platform boundary, not GPU
+//! backends. OS-native / mini-program / web adapters, native widget embedding and
+//! Metal/Vulkan/ANGLE GPU presentation remain later rounds (R4+).
 
 use std::fmt;
 
 mod headless;
+mod terminal;
 
 pub use headless::Headless;
+pub use terminal::Terminal;
 
 /// Logical viewport size in pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,8 +114,9 @@ pub struct PlatformSpec {
     pub status: Status,
 }
 
-/// The headless reference adapter: the only Verified platform in v0.1.
-/// It is a host/adapter, not a target emitter, so it is not one of the 14 target rows.
+/// The headless reference adapter: a Verified host (v0.1). It is a host/adapter, not
+/// a target emitter, so it is not one of the 14 target rows. R3 adds `TERMINAL_SPEC`
+/// as a second Verified host.
 pub const HEADLESS_SPEC: PlatformSpec = PlatformSpec {
     name: "headless",
     emitter: "headless",
@@ -125,8 +130,26 @@ pub const HEADLESS_SPEC: PlatformSpec = PlatformSpec {
     status: Status::Verified,
 };
 
+/// R3 Verified host adapter: terminal truecolor ANSI presentation (R3_ADDENDUM.md
+/// section 6). A thin host adapter demonstrating the platform boundary, not a GPU
+/// backend. Like `headless` it is a host, not one of the 14 target emitter rows, so
+/// it is exposed via `host_platforms()` / `spec_by_name()` / the CLI `--hosts` flag.
+pub const TERMINAL_SPEC: PlatformSpec = PlatformSpec {
+    name: "terminal",
+    emitter: "terminal",
+    capabilities: Capabilities {
+        gpu: false,
+        native_embed: false,
+        multi_window: false,
+        lifecycle: false,
+        dpi_scale: 1.0,
+    },
+    status: Status::Verified,
+};
+
 const fn caps(multi_window: bool, lifecycle: bool, dpi_scale: f32) -> Capabilities {
-    // GPU presentation and native widget embedding are R2+ work, false everywhere in v0.1.
+    // GPU presentation and native widget embedding are later rounds (R4+), false
+    // everywhere; the headless and terminal hosts never claim them either.
     Capabilities {
         gpu: false,
         native_embed: false,
@@ -231,7 +254,9 @@ pub fn registry() -> Vec<PlatformSpec> {
     TARGET_SPECS.to_vec()
 }
 
-/// Every platform v0.1 knows about: the headless oracle plus the 14 targets.
+/// The frozen v0.1 listing: the headless oracle plus the 14 targets (15, one
+/// `Verified`). Kept in its R2 shape as a stable regression oracle; R3 Verified
+/// hosts are listed by `host_platforms()` and covered by `spec_by_name()`.
 pub fn all_platforms() -> Vec<PlatformSpec> {
     let mut all = Vec::with_capacity(TARGET_SPECS.len() + 1);
     all.push(HEADLESS_SPEC.clone());
@@ -239,7 +264,17 @@ pub fn all_platforms() -> Vec<PlatformSpec> {
     all
 }
 
-/// Query the registry by name, including the headless reference adapter.
+/// Fully implemented, `Verified` host adapters (run on any OS, not target emitters).
+/// R3 adds `terminal` alongside the v0.1 `headless` oracle; listed by `--hosts`.
+pub fn host_platforms() -> Vec<PlatformSpec> {
+    vec![HEADLESS_SPEC.clone(), TERMINAL_SPEC.clone()]
+}
+
+/// Query any known platform by name: the 14 targets, the headless oracle and the
+/// R3 terminal host.
 pub fn spec_by_name(name: &str) -> Option<PlatformSpec> {
-    all_platforms().into_iter().find(|spec| spec.name == name)
+    all_platforms()
+        .into_iter()
+        .chain(std::iter::once(TERMINAL_SPEC.clone()))
+        .find(|spec| spec.name == name)
 }
