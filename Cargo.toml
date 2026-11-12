@@ -2,6 +2,36 @@
 name = "opurom-platform"
 version = "0.1.0"
 edition = "2021"
-description = "OPUROM platform adapter ABI, capability registry and headless reference adapter"
+description = "OPUROM platform adapter ABI, capability registry and host adapters"
 
 [dependencies]
+png = "0.17.16"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = "0.25.0"
+objc2 = { version = "0.6.5", features = ["std"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "NSApplication",
+    "NSGraphics",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSScreen",
+    "NSView",
+    "NSWindow",
+    "objc2-core-foundation",
+    "objc2-core-graphics",
+    "objc2-quartz-core",
+    "std",
+] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "NSGeometry",
+    "objc2-core-foundation",
+    "std",
+] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
+    "CALayer",
+    "CAMetalLayer",
+    "objc2-core-foundation",
+    "objc2-core-graphics",
+    "std",
+] }

@@ -495,7 +495,10 @@ fn terminal_is_a_verified_host_in_registry() {
     assert_eq!(spec.emitter, "terminal");
     // Verified hosts are exposed via host_platforms(); registry() stays the 14 targets.
     let hosts = host_platforms();
-    assert_eq!(hosts.len(), 2);
+    assert!(
+        hosts.len() >= 2,
+        "headless and terminal remain Verified hosts"
+    );
     assert!(
         hosts
             .iter()

@@ -41,13 +41,19 @@ fn default_output_keeps_the_14_unique_target_rows() {
     assert_eq!(unique.len(), 14, "14 unique target names");
     assert!(!names.contains(&"terminal"), "terminal is not a target row");
     assert!(!names.contains(&"headless"), "headless is not a target row");
+    assert!(!names.contains(&"appkit"), "appkit is not a target row");
 }
 
 #[test]
 fn hosts_flag_lists_the_verified_hosts() {
     let out = run(&["--hosts"]);
     let lines: Vec<&str> = out.lines().collect();
-    assert_eq!(lines.len(), 3, "header + headless + terminal");
+    let expected_lines = if cfg!(target_os = "macos") { 4 } else { 3 };
+    assert_eq!(
+        lines.len(),
+        expected_lines,
+        "header + cross-platform hosts + macOS appkit"
+    );
     let data = &lines[1..];
     let names: Vec<&str> = data
         .iter()
