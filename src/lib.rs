@@ -18,6 +18,10 @@ mod ppm;
 mod terminal;
 mod verify;
 mod window_set;
+// Pure X11 pixel maths: used by the Linux adapter and by `cargo test` on every
+// host; excluded from non-Linux production builds to avoid dead-code warnings.
+#[cfg(any(target_os = "linux", test))]
+mod x11_pixels;
 
 #[cfg(target_os = "macos")]
 mod appkit;

@@ -12,7 +12,10 @@ use std::collections::VecDeque;
 use std::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void};
 use std::ptr::{null, null_mut};
 
-use crate::{AdapterError, Capabilities, FrameView, InputEvent, Lifecycle, PlatformAdapter, Size};
+use crate::{
+    x11_pixels::{checked_len, rgba_to_xpixel},
+    AdapterError, Capabilities, FrameView, InputEvent, Lifecycle, PlatformAdapter, Size,
+};
 
 type Window = c_ulong;
 type Drawable = c_ulong;
@@ -326,39 +329,6 @@ unsafe fn symbol<T>(handle: *mut c_void, name: &[u8]) -> Result<T, AdapterError>
     // POSIX permits a void* symbol address to be used as a function pointer;
     // on Linux both representations have the same size.
     Ok(std::mem::transmute_copy::<*mut c_void, T>(&pointer))
-}
-
-fn checked_len(width: u32, height: u32) -> Result<usize, AdapterError> {
-    if width == 0
-        || height == 0
-        || width > c_int::MAX as u32
-        || height > c_int::MAX as u32
-        || width > (c_int::MAX as u32) / 4
-    {
-        return Err(AdapterError::InvalidFrame);
-    }
-    (width as usize)
-        .checked_mul(4)
-        .and_then(|row| row.checked_mul(height as usize))
-        .ok_or(AdapterError::InvalidFrame)
-}
-
-/// Pack RGBA8 through the 32-bit TrueColor masks in XImage native byte order.
-/// Bits outside the RGB masks are set to one so the pixel is opaque.
-fn rgba_to_xpixel(pixels: &[u8], masks: (u32, u32, u32, u32)) -> Result<Vec<u8>, AdapterError> {
-    let (red, green, blue, alpha) = masks;
-    if red == 0 || green == 0 || blue == 0 {
-        return Err(AdapterError::Backend("X11 TrueColor masks are invalid"));
-    }
-    let mut packed = Vec::with_capacity(pixels.len());
-    for rgba in pixels.chunks_exact(4) {
-        let value = ((rgba[0] as u32) << red.trailing_zeros()) & red
-            | ((rgba[1] as u32) << green.trailing_zeros()) & green
-            | ((rgba[2] as u32) << blue.trailing_zeros()) & blue
-            | alpha;
-        packed.extend_from_slice(&value.to_ne_bytes());
-    }
-    Ok(packed)
 }
 
 unsafe fn destroy_image(lib: &Xlib, image: *mut XImage) {
@@ -685,8 +655,7 @@ impl Drop for X11Host {
 
 #[cfg(test)]
 mod tests {
-    use super::{checked_len, rgba_to_xpixel, Xlib};
-    use crate::AdapterError;
+    use super::Xlib;
 
     #[test]
     fn runtime_loader_reports_missing_x11_or_resolves_all_symbols() {
@@ -694,23 +663,5 @@ mod tests {
             Ok(lib) => assert!(!lib.handle.is_null()),
             Err(error) => assert!(error.to_string().contains("X11 unavailable"), "{error}"),
         }
-    }
-
-    #[test]
-    fn rgba_uses_the_visual_masks_in_native_byte_order() {
-        let masks = (0x00ff_0000, 0x0000_ff00, 0x0000_00ff, 0xff00_0000);
-        let packed = rgba_to_xpixel(&[10, 20, 30, 255], masks).unwrap();
-        assert_eq!(&packed[..4], &0xff1e140au32.to_ne_bytes());
-        assert!(rgba_to_xpixel(&[10, 20, 30, 255], (0, 0, 0, 0)).is_err());
-    }
-
-    #[test]
-    fn frame_lengths_are_checked_before_any_xlib_call() {
-        assert_eq!(checked_len(2, 2), Ok(16));
-        assert_eq!(checked_len(0, 1), Err(AdapterError::InvalidFrame));
-        assert_eq!(
-            checked_len(u32::MAX, u32::MAX),
-            Err(AdapterError::InvalidFrame)
-        );
     }
 }
