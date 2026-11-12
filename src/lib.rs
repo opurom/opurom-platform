@@ -10,20 +10,31 @@
 use std::fmt;
 
 mod headless;
+mod pixel;
 mod png;
+mod ppm;
 mod terminal;
+mod verify;
 mod window_set;
 
 #[cfg(target_os = "macos")]
 mod appkit;
+#[cfg(target_os = "macos")]
+mod core_graphics_bridge;
 
 pub use headless::Headless;
+pub use pixel::{compare_rgba_to_ppm, PixelComparison, CHANNEL_TOLERANCE, MISMATCH_BUDGET_PERCENT};
 pub use png::frame_to_png;
+pub use ppm::{read_ppm, PpmImage};
 pub use terminal::Terminal;
+pub use verify::{compare_capture, render_reference_ppm, software_renderer_path, Verification};
 pub use window_set::WindowSet;
 
 #[cfg(target_os = "macos")]
-pub use appkit::{MacHost, MacHostDescriptor, MacWindow};
+pub use appkit::{
+    capture_window, draw_and_capture, window_availability, write_png, CapturedWindow, MacHost,
+    MacHostDescriptor, MacWindow, WindowUnavailable,
+};
 
 /// Logical viewport size in pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -161,6 +172,18 @@ pub const TERMINAL_SPEC: PlatformSpec = PlatformSpec {
 /// Non-macOS fallback for the macOS-only PNG path. It is an error value, never
 /// a fabricated CoreGraphics result or a fake success.
 pub const APPKIT_UNAVAILABLE: &str = "AppKitUnavailable: frame_to_png requires macOS";
+
+/// Environment override that forces the on-screen verification to SKIP. CI
+/// sets `OPR_SKIP_WINDOW=1` so a headless runner never claims a PASS.
+pub const SKIP_WINDOW_ENV: &str = "OPR_SKIP_WINDOW";
+
+/// Environment override that points the verification at a pre-rendered
+/// software-renderer PPM instead of running the renderer itself.
+pub const REFERENCE_PPM_ENV: &str = "OPR_REFERENCE_PPM";
+
+/// Environment override for the software renderer binary used to produce the
+/// reference PPM.
+pub const RENDERER_BIN_ENV: &str = "OPUROM_RENDER_BIN";
 
 /// R5 Verified host on macOS. `native_embed` marks the real `NSView` /
 /// `CAMetalLayer` native host surface, not an embedded widget tree; `gpu` stays
@@ -317,6 +340,7 @@ pub fn appkit_spec() -> PlatformSpec {
 /// Fully implemented, `Verified` host adapters (not target emitters). R3 adds
 /// `terminal`; R5 adds `appkit` on macOS only. Listed by `--hosts`.
 pub fn host_platforms() -> Vec<PlatformSpec> {
+    #[allow(unused_mut)]
     let mut hosts = vec![HEADLESS_SPEC.clone(), TERMINAL_SPEC.clone()];
     #[cfg(target_os = "macos")]
     hosts.push(appkit_spec());

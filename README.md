@@ -1,4 +1,4 @@
-# opurom-platform - Platform Adapter ABI v0.1 + R5 macOS host
+# opurom-platform - Platform Adapter ABI v0.1 + R7 live native window
 
 Independent Rust crate implementing the normative
 [ADAPTER_CONTRACT.md](../opurom-spec/ADAPTER_CONTRACT.md). The ABI, registry,
@@ -7,8 +7,11 @@ cached `png` crate; macOS AppKit/CoreGraphics dependencies are target-scoped,
 so Linux CI builds the crate without AppKit. R5 adds a real macOS `NSApplication`
 / `NSWindow` / `NSView` host descriptor with a `CAMetalLayer`-compatible surface,
 a headlessly verifiable RGBA8-to-PNG path and deterministic multi-window state.
+R7 turns `open_window()` into a **tested entry point**: it opens a real AppKit
+window, captures the window's own pixels with `cacheDisplay(in:to:)` and
+compares them against the software renderer.
 
-## Status (honest, R5)
+## Status (honest, R7)
 
 | name | emitter | status | gpu | native_embed | multi_window |
 | --- | --- | --- | --- | --- | --- |
@@ -52,7 +55,9 @@ are made.
 
 OS-native windows for Windows/Linux/Harmony, native widget embedding, full GPU
 UI rasterization, Vulkan/ANGLE/D3D backends, and real device conformance remain
-**R6+**. No live GUI session was exercised in tests or CI.
+**R8+**. R7 does exercise a live GUI session, but only on macOS and only for the
+single AppKit host below; the Linux CI runner has no window server and always
+reports SKIP.
 
 ## ABI summary
 
@@ -69,6 +74,8 @@ UI rasterization, Vulkan/ANGLE/D3D backends, and real device conformance remain
 | `host_platforms()` | implemented `Verified` hosts; 3 rows on macOS, 2 elsewhere |
 | `WindowSet` | 2..4 independent viewports with isolated sizes, event FIFOs and frame buffers |
 | `frame_to_png(FrameView, path)` | real PNG output through a `CGImage` on macOS; documented `AppKitUnavailable` error elsewhere |
+| `open_window()` (macOS) | real `NSWindow`/`NSView`; draw, `cacheDisplay(in:to:)` capture, real PNG |
+| `compare_rgba_to_ppm` | captured window pixels vs the software renderer PPM, with a documented tolerance |
 
 ### Headless reference adapter
 
@@ -108,14 +115,97 @@ NSApplication | NSWindow | NSView | CAMetalLayer | Titled|Closable|Miniaturizabl
 `MacHost::open_window()` is the **live-window entry point**. It requires a
 GUI-capable macOS main thread, calls `NSApplication.sharedApplication`, creates
 an `NSWindow`, an `NSView` and a real `CAMetalLayer`, attaches the layer to the
-view and calls `makeKeyAndOrderFront`. It does not run an event loop. **Tests and
-CI never call `open_window()`**; no GUI session is available or exercised, and
-`MacHost::describe()`/the PNG path are the headlessly verified surface.
+view and calls `makeKeyAndOrderFront`. `MacHost::describe()`/the PNG path stay
+headlessly verifiable; `open_window()` additionally needs a real window server.
 
 `MacHost::new(w, h, path)` keeps a `Headless`-backed viewport, event FIFO and
 frame buffer. `present(FrameView)` calls `frame_to_png`, then stores the frame
 and digest; an invalid frame leaves both state and any previous PNG untouched.
 `capabilities()` uses the real/fallback DPI scale described above.
+
+### Live window and on-screen pixel verification (R7)
+
+`open_window()` is a **real, tested** entry point on macOS. The pipeline is:
+
+1. `open_window()` creates the `NSApplication`, `NSWindow` and `NSView` on the
+   process main thread. A host without a window server gets an
+   `AdapterError::Backend` with a concrete reason, never a fabricated window.
+2. The frame under test is drawn into the view's `CALayer` as a real `CGImage`
+   (built through `CGImageCreate` in `src/core_graphics_bridge.rs`).
+3. The AppKit event loop runs for a fixed 0.25 s via
+   `NSRunLoop.runUntilDate(_:)` so the compositor picks the frame up. The call
+   returns after its deadline, so the verification **never hangs**.
+4. `cacheDisplay(in:to:)` captures the window's own pixels into an
+   `NSBitmapImageRep`. The whole window is captured through its theme frame, so
+   the PNG includes the real system title bar.
+5. The capture is written as a real PNG (`src/png.rs`, `png` crate).
+6. The **content region** (title bar excluded - it is AppKit chrome, not the
+   rendered frame) is compared against the software renderer's PPM for the same
+   IR.
+
+The comparison uses two documented constants, both in `src/pixel.rs`:
+
+| Constant | Value | Why |
+| --- | --- | --- |
+| `CHANNEL_TOLERANCE` | `32` per channel (12.5 % of 255) | The capture passes through the display colour profile. On a Display-P3 screen a pure accent block (79, 70, 229) measured (71, 58, 201), a per-channel shift of up to 28. |
+| `MISMATCH_BUDGET_PERCENT` | `2.0` % of the compared region | Colour-profile rounding affects only a small part of the frame; the measured run had 0 mismatching pixels. |
+
+A pixel counts as mismatching when **any** of its R, G or B channels differs by
+more than `CHANNEL_TOLERANCE`. Alpha is ignored. The check passes when the
+mismatch percentage stays within `MISMATCH_BUDGET_PERCENT`. Both constants are
+asserted by a test, so the tolerance is part of the contract and not a magic
+number.
+
+Run it:
+
+```sh
+cargo run --quiet --offline -- --verify-window --out /tmp/opurom-window.png
+```
+
+The verdict is one line on stdout:
+
+```text
+PASS window=200x150 mismatched_pixels=0 compared_pixels=30000 mismatch=0.0000% max_channel_delta=25 tolerance=32 png=/tmp/opurom-window.png
+```
+
+`PASS` means the live window's pixels match the software renderer within the
+tolerance above. `FAIL` means they do not; it reports the measured mismatch
+count and percentage and exits 1.
+
+**SKIP, never a fake PASS.** When the host cannot show a window - no Aqua
+session, no main screen, no window server, or not the main thread - the check
+prints `SKIP <concrete reason>` and exits **0**. The reasons are checked with
+`CGSessionCopyCurrentDictionary()` and `NSScreen.mainScreen`. The environment
+override `OPR_SKIP_WINDOW=1` forces a SKIP on any host, which is what CI uses:
+
+```sh
+OPR_SKIP_WINDOW=1 cargo run --quiet --offline -- --verify-window
+# SKIP OPR_SKIP_WINDOW is set
+```
+
+Two further overrides exist for harnesses: `OPUROM_RENDER_BIN` points at the
+software renderer binary (default `../opurom-render/target/debug/opurom-render`)
+and `OPR_REFERENCE_PPM` supplies a pre-rendered reference PPM instead of
+running the renderer.
+
+The measured R7 result on the reference host (macOS arm64, 200x150 frame) is
+**200x182 captured pixels** (32 px of system title bar above the 200x150
+content), **0 mismatching pixels out of 30 000 compared**, and a maximum
+per-channel delta of **25**.
+
+#### R7 scope (honest)
+
+- **macOS only.** The live window and the pixel verification do not exist on
+  other platforms; they report SKIP with that reason.
+- **One window at a time in R7.** `WindowSet` is still deterministic viewport
+  state, not a set of live OS windows.
+- **No multi-display.** The window is created on the main screen only.
+- **No HiDPI colour management beyond the system default.** The capture uses
+  the display profile; the tolerance absorbs the shift, it does not correct it.
+- **No native widget embedding.** `native_embed: true` reports the real
+  `NSView`/`CAMetalLayer` host surface; no AppKit controls are embedded.
+- **No native windows on Windows, Linux or Harmony** (R8+), and no GPU
+  rasterization or Metal drawable presentation (`gpu` stays `false`).
 
 ### Pure RGBA8 to PNG path
 
@@ -181,6 +271,10 @@ headless `frame_to_png` path and prints nothing on success. The cross-layer
 harness can verify the PNG signature and IHDR without starting a GUI session.
 A missing path exits 2; a PNG/AppKit error exits 1 with the error on stderr.
 
+`--verify-window` runs the live-window pixel verification described above. It
+accepts `--ir <path>`, `--width <n>`, `--height <n>` and `--out <path>`, prints
+one `PASS`, `FAIL` or `SKIP` line and exits 0 for PASS and SKIP, 1 for FAIL.
+
 ```text
 name | emitter | status | gpu | native_embed | multi_window
 headless | headless | Verified | false | false | false
@@ -197,9 +291,14 @@ cargo build --offline
 cargo test --offline
 cargo run --quiet --offline -- --hosts
 cargo run --quiet --offline -- --png /tmp/opurom-r5.png
+cargo run --quiet --offline -- --verify-window --out /tmp/opurom-window.png
 ```
 
-All 18 R4 tests stay green; R5 adds 12 tests (including CLI `--png`, PNG pixel
-decoding, AppKit description/capabilities, `WindowSet` bounds/isolation and the
-documented non-macOS fallback). `cargo fmt --all`, `cargo build --offline` and
-`cargo test --offline` produce zero warnings.
+All 30 R6 tests stay green; R7 adds 14 tests (the live-window pixel
+verification, the `OPR_SKIP_WINDOW=1` SKIP path, the documented tolerance, the
+PPM reader, the tolerant pixel comparison and the `CGImage` bridge). `cargo
+fmt --all`, `cargo build --offline` and `cargo test --offline` produce zero
+warnings on macOS and on the Linux CI target.
+
+On a host with a GUI session the `--verify-window` run reports `PASS` with the
+measured numbers. On a headless host it reports `SKIP <reason>` and exits 0.
