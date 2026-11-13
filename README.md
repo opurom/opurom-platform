@@ -270,7 +270,6 @@ drawable, or no IOSurface-backed presented texture. `OPR_SKIP_WINDOW=1` forces
 the documented `SKIP OPR_SKIP_WINDOW is set`; `OPUROM_GPU_DYLIB` overrides the
 dylib path; `OPUROM_RENDER_BIN` and `OPR_REFERENCE_PPM` remain available. A
 headless Linux runner prints `SKIP GPU presentation is macOS/Metal only`.
-Never a fake PASS.
 
 Measured on the reference host (macOS arm64, Apple M6, 200x150 frame):
 **200x182 PNG** (32 px title bar + 200x150 content), **0 mismatching pixels
@@ -333,7 +332,7 @@ Metal device, no drawable, or no IOSurface-backed presented texture.
 `OPUROM_RENDER_BIN`, `--ir`, `--width`, `--height` and `--out` remain
 available. Metal/API errors, a mismatched sequence or a stale surface print
 `FAIL` with the measured numbers and exit 1. A headless Linux runner prints
-`SKIP GPU animation loop is macOS/Metal only`. Never a fake PASS.
+`SKIP GPU animation loop is macOS/Metal only`.
 
 This is a bounded deterministic sequence of four presented frames on one
 window, not a real-time render loop. There is no fps claim, no smoothness or
@@ -368,7 +367,9 @@ and RGBA8 frame buffer. `resize(index, size)`, `push_event`, `poll_event`,
 `AdapterError::Backend("invalid window index")`.
 
 `viewports()` returns every viewport size in index order for hosts that lay out
-a multi-window surface in one pass. `broadcast_event(event)` delivers one
+a multi-window surface in one pass. `resize_all(size)` applies one viewport size
+to every window, which covers split-screen and foldable transitions.
+`broadcast_event(event)` delivers one
 normalized input to every window, which supports synchronized multi-device
 debugging. Each window keeps its own event FIFO, so a subsequent per-window
 `push_event` reaches only that window. This is deterministic viewport state,
