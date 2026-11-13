@@ -412,13 +412,51 @@ pub fn host_platforms() -> Vec<PlatformSpec> {
     hosts
 }
 
-/// Query any known platform by name: the 14 targets, the headless oracle, the
-/// the terminal host, the Wayland host row and (on macOS) the AppKit host.
-pub fn spec_by_name(name: &str) -> Option<PlatformSpec> {
+/// A single boolean capability flag from `Capabilities`, usable as a registry
+/// query key. `dpi_scale` is a numeric measurement rather than a boolean flag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Capability {
+    Gpu,
+    NativeEmbed,
+    MultiWindow,
+    Lifecycle,
+}
+
+impl PlatformSpec {
+    /// Whether this platform advertises `capability`.
+    pub fn supports(&self, capability: Capability) -> bool {
+        match capability {
+            Capability::Gpu => self.capabilities.gpu,
+            Capability::NativeEmbed => self.capabilities.native_embed,
+            Capability::MultiWindow => self.capabilities.multi_window,
+            Capability::Lifecycle => self.capabilities.lifecycle,
+        }
+    }
+}
+
+/// Every platform the crate can resolve by name: the frozen v0.1 listing, the
+/// terminal host, the Wayland host row and (on macOS) the AppKit host.
+pub fn known_platforms() -> Vec<PlatformSpec> {
     let mut known = all_platforms();
     known.push(TERMINAL_SPEC.clone());
     known.push(WAYLAND_SPEC.clone());
     #[cfg(target_os = "macos")]
     known.push(appkit_spec());
-    known.into_iter().find(|spec| spec.name == name)
+    known
+}
+
+/// Known platforms that advertise `capability`, in `known_platforms()` order.
+/// Hosts select feature-capable platforms without depending on the frozen row
+/// layout.
+pub fn platforms_with(capability: Capability) -> Vec<PlatformSpec> {
+    known_platforms()
+        .into_iter()
+        .filter(|spec| spec.supports(capability))
+        .collect()
+}
+
+/// Query any known platform by name: the 14 targets, the headless oracle, the
+/// terminal host, the Wayland host row and (on macOS) the AppKit host.
+pub fn spec_by_name(name: &str) -> Option<PlatformSpec> {
+    known_platforms().into_iter().find(|spec| spec.name == name)
 }

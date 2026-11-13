@@ -49,6 +49,14 @@ each unique and each `Scaffold` or `Planned`; the `macos` target row remains
 `appkit`; other targets list only the two cross-platform hosts. `appkit` is
 also reachable through `spec_by_name("appkit")` on macOS.
 
+`known_platforms()` enumerates every platform the crate resolves by name: the
+frozen `all_platforms()` listing plus the `terminal` host, the `wayland` host
+row and, on macOS, the `appkit` host. `platforms_with(capability)` returns the
+subset advertising one boolean capability flag, in `known_platforms()` order.
+The closed `Capability` enum covers the four boolean flags (`Gpu`,
+`NativeEmbed`, `MultiWindow`, `Lifecycle`); `dpi_scale` is a numeric
+measurement. `PlatformSpec::supports(capability)` reports a single spec's flag.
+
 `APPKIT_SPEC.native_embed: true` reports the real `NSView` / `CAMetalLayer`
 native host surface. It does **not** claim an embedded AppKit control/widget
 tree: the AppKit host embeds no native widgets. `gpu` stays `false` for the adapter because
@@ -96,6 +104,7 @@ binary), matching the X11 fix; all AppKit/Metal code is `cfg`-gated.
 | `Status` | `Verified`, `Scaffold`, `Planned` |
 | `registry()` / `all_platforms()` / `spec_by_name()` | frozen target rows and host lookups |
 | `host_platforms()` | implemented `Verified` hosts; 3 rows on macOS, 2 elsewhere |
+| `known_platforms()` / `platforms_with()` / `supports()` | complete platform enumeration and queries over the four boolean `Capability` flags |
 | `WindowSet` | 2..4 independent viewports with isolated sizes, event FIFOs and frame buffers |
 | `frame_to_png(FrameView, path)` | real PNG output through a `CGImage` on macOS; documented `AppKitUnavailable` error elsewhere |
 | `open_window()` (macOS) | real `NSWindow`/`NSView`; draw, `cacheDisplay(in:to:)` capture, real PNG |
@@ -569,10 +578,10 @@ From the umbrella root the built CLI can be invoked directly as
 `./opurom-platform/target/debug/opurom-platform --verify-gpu-presentation --out /tmp/opurom-gpu-presentation.png`;
 the renderer, IR and GPU dylib paths are absolute and CWD-independent.
 
-`cargo test --offline` runs **85 tests** on macOS: 36 library unit tests
-(including four pure animation-loop checks and eleven pure Wayland wire checks),
+`cargo test --offline` runs **95 tests** on macOS: 40 library unit tests
+(including four pure animation-loop checks and fifteen pure Wayland wire checks),
 two accessibility tests, eleven
-AppKit host tests, two CLI tests, sixteen conformance tests, seven
+AppKit host tests, two CLI tests, twenty-two conformance tests, seven
 animation-loop integration tests, four GPU presentation integration tests
 (presentation-on-screen, forced SKIP, missing-dylib SKIP and status honesty),
 four native-window tests and three Wayland integration tests
