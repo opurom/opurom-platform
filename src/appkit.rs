@@ -9,6 +9,7 @@
 //! window, lets AppKit composite it, captures the window's own pixels with
 //! `cacheDisplay(in:to:)` and writes a real PNG.
 
+use std::ffi::c_void;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -17,8 +18,8 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSBitmapImageRep, NSScreen,
     NSView, NSWindow, NSWindowStyleMask,
 };
-use objc2_foundation::{NSPoint, NSRect, NSSize};
-use objc2_quartz_core::CAMetalLayer;
+use objc2_foundation::{NSDate, NSPoint, NSRect, NSRunLoop, NSSize};
+use objc2_quartz_core::{CAMetalLayer, CATransaction};
 
 use crate::{
     appkit_capabilities, frame_to_png, AdapterError, Capabilities, FrameView, Headless, InputEvent,
@@ -279,6 +280,20 @@ impl MacWindow {
     pub fn keep_alive(&self) {
         let _ = (&self.application, &self.window, &self.view, &self.layer);
     }
+
+    /// Opaque pointer to the retained `CAMetalLayer` for the runtime GPU bridge.
+    pub fn metal_layer_ptr(&self) -> *mut c_void {
+        &*self.layer as *const CAMetalLayer as *mut c_void
+    }
+
+    /// Let AppKit and Core Animation composite one presented drawable.
+    pub fn settle(&self) {
+        CATransaction::flush();
+        let deadline = NSDate::dateWithTimeIntervalSinceNow(EVENT_LOOP_SECONDS);
+        NSRunLoop::currentRunLoop().runUntilDate(&deadline);
+        self.window.displayIfNeeded();
+        self.view.displayIfNeeded();
+    }
 }
 
 /// A captured window image: RGBA8 pixels plus the dimensions of the capture.
@@ -323,14 +338,8 @@ pub fn draw_and_capture(
     layer.setContentsGravity(unsafe { objc2_quartz_core::kCAGravityResize });
     layer.setContentsScale(window.window.backingScaleFactor() as f64);
 
-    // Run the AppKit event loop briefly so the window is composited before
-    // the capture. `runUntilDate:` returns after the deadline, so this never
-    // blocks forever.
-    let deadline = objc2_foundation::NSDate::dateWithTimeIntervalSinceNow(EVENT_LOOP_SECONDS);
-    objc2_foundation::NSRunLoop::currentRunLoop().runUntilDate(&deadline);
-
-    window.window.displayIfNeeded();
-    window.view.displayIfNeeded();
+    // Let AppKit and Core Animation composite the layer before the capture.
+    window.settle();
 
     let bounds = window.view.bounds();
     let Some(rep) = window.view.bitmapImageRepForCachingDisplayInRect(bounds) else {

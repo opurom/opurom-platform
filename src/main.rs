@@ -1,14 +1,17 @@
-#[cfg(target_os = "macos")]
-use opurom_platform::Verification;
 use opurom_platform::{
     frame_to_png, host_platforms, parse_a11y_json, post_a11y_tree, registry, FrameView,
-    DEFAULT_A11Y_TREE,
+    DEFAULT_A11Y_TREE, SKIP_WINDOW_ENV,
+};
+#[cfg(target_os = "macos")]
+use opurom_platform::{
+    present_display_list, workspace_root, PixelComparison, PresentationOutcome, Verification,
+    CHANNEL_TOLERANCE, MISMATCH_BUDGET_PERCENT,
 };
 
 #[cfg(target_os = "macos")]
 use opurom_platform::{
-    compare_capture, read_ppm, render_reference_ppm, software_renderer_path, window_availability,
-    PpmImage, REFERENCE_PPM_ENV, SKIP_WINDOW_ENV,
+    compare_capture, read_ppm, render_reference_ppm, render_reference_with_commands,
+    software_renderer_path, window_availability, PpmImage, REFERENCE_PPM_ENV,
 };
 #[cfg(target_os = "macos")]
 use std::path::{Path, PathBuf};
@@ -40,39 +43,25 @@ fn write_test_png(path: &str) {
     }
 }
 
-/// The default reference IR of the OPUROM project.
+/// The default reference IR of the OPUROM project, resolved from the crate
+/// manifest so the CLI works from any working directory.
 #[cfg(target_os = "macos")]
-const DEFAULT_IR: &str = "../opurom-spec/counter.opuir.json";
+fn default_ir() -> PathBuf {
+    workspace_root().join("opurom-spec/counter.opuir.json")
+}
 #[cfg(target_os = "macos")]
 const DEFAULT_WIDTH: u32 = 200;
 #[cfg(target_os = "macos")]
 const DEFAULT_HEIGHT: u32 = 150;
 
-/// Run the on-screen verification and print its verdict. Returns the process
-/// exit code: 0 for PASS and SKIP, 1 for FAIL.
 #[cfg(target_os = "macos")]
-fn verify_window(args: &[String]) -> i32 {
-    if std::env::var(SKIP_WINDOW_ENV).is_ok() {
-        let verification = Verification::Skipped {
-            reason: format!("{SKIP_WINDOW_ENV} is set"),
-        };
-        println!("{}", verification.report());
-        return 0;
-    }
-    if let Err(reason) = window_availability() {
-        let verification = Verification::Skipped {
-            reason: reason.to_string(),
-        };
-        println!("{}", verification.report());
-        return 0;
-    }
-
+fn verification_options(args: &[String]) -> (PathBuf, u32, u32, PathBuf) {
     let ir = args
         .iter()
         .position(|arg| arg == "--ir")
         .and_then(|index| args.get(index + 1))
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_IR));
+        .unwrap_or_else(default_ir);
     let width = args
         .iter()
         .position(|arg| arg == "--width")
@@ -93,6 +82,29 @@ fn verify_window(args: &[String]) -> i32 {
         // Default into the system temp directory: a verification run must never
         // leave artifacts in the working tree it was launched from.
         .unwrap_or_else(|| std::env::temp_dir().join("opurom-window.png"));
+    (ir, width, height, png_path)
+}
+
+/// Run the on-screen verification and print its verdict. Returns the process
+/// exit code: 0 for PASS and SKIP, 1 for FAIL.
+#[cfg(target_os = "macos")]
+fn verify_window(args: &[String]) -> i32 {
+    if std::env::var(SKIP_WINDOW_ENV).is_ok() {
+        let verification = Verification::Skipped {
+            reason: format!("{SKIP_WINDOW_ENV} is set"),
+        };
+        println!("{}", verification.report());
+        return 0;
+    }
+    if let Err(reason) = window_availability() {
+        let verification = Verification::Skipped {
+            reason: reason.to_string(),
+        };
+        println!("{}", verification.report());
+        return 0;
+    }
+
+    let (ir, width, height, png_path) = verification_options(args);
 
     // The reference frame comes from the software renderer, either from a
     // pre-rendered PPM or by running the sibling renderer binary.
@@ -113,7 +125,7 @@ fn verify_window(args: &[String]) -> i32 {
         Err(_) => {
             let Some(renderer) = software_renderer_path() else {
                 println!(
-                    "SKIP the software renderer was not found at ../opurom-render/target/debug/opurom-render (set {REFERENCE_PPM_ENV} to a pre-rendered PPM)"
+                    "SKIP the software renderer was not found (set {REFERENCE_PPM_ENV} to a pre-rendered PPM)"
                 );
                 return 0;
             };
@@ -212,10 +224,7 @@ fn run_window_capture(
 #[cfg(target_os = "macos")]
 fn render_frame_png(ir: &Path, width: u32, height: u32) -> Result<Vec<u8>, String> {
     let Some(renderer) = software_renderer_path() else {
-        return Err(
-            "the software renderer was not found at ../opurom-render/target/debug/opurom-render"
-                .to_string(),
-        );
+        return Err("the software renderer was not found".to_string());
     };
     let ppm_path = std::env::temp_dir().join(format!(
         "opurom-platform-frame-{}-{width}x{height}.ppm",
@@ -236,15 +245,209 @@ fn render_frame_png(ir: &Path, width: u32, height: u32) -> Result<Vec<u8>, Strin
     Ok(pixels)
 }
 
+/// R10: present the R9 GPU frame into a real drawable and verify on-screen pixels.
+#[cfg(target_os = "macos")]
+fn one_line(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(target_os = "macos")]
+struct GpuReport {
+    captured: (u32, u32),
+    content: (u32, u32),
+    title_bar: u32,
+    comparison: PixelComparison,
+    png: PathBuf,
+}
+
+#[cfg(target_os = "macos")]
+enum GpuVerdict {
+    Passed(GpuReport),
+    Failed(GpuReport),
+    Skipped(String),
+    Error(String),
+}
+
+#[cfg(target_os = "macos")]
+fn gpu_report_line(verdict: &str, report: &GpuReport) -> String {
+    format!(
+        "{verdict} backend=metal-blit captured={}x{} content={}x{} title_bar={} mismatched_pixels={} compared_pixels={} mismatch={:.4}% max_channel_delta={} tolerance={} budget={:.1}% png={}",
+        report.captured.0,
+        report.captured.1,
+        report.content.0,
+        report.content.1,
+        report.title_bar,
+        report.comparison.mismatched_pixels,
+        report.comparison.compared_pixels,
+        report.comparison.mismatch_percent(),
+        report.comparison.max_channel_delta,
+        CHANNEL_TOLERANCE,
+        MISMATCH_BUDGET_PERCENT,
+        report.png.display(),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn read_reference_ppm(path: &Path) -> Result<PpmImage, String> {
+    let bytes = std::fs::read(path)
+        .map_err(|error| format!("cannot read reference PPM {}: {error}", path.display()))?;
+    read_ppm(&bytes).map_err(|error| format!("malformed reference PPM {}: {error}", path.display()))
+}
+
+#[cfg(target_os = "macos")]
+fn verify_gpu_presentation(args: &[String]) -> i32 {
+    if std::env::var(SKIP_WINDOW_ENV).is_ok() {
+        println!("SKIP {SKIP_WINDOW_ENV} is set");
+        return 0;
+    }
+    if let Err(reason) = window_availability() {
+        println!("SKIP {}", one_line(&reason.to_string()));
+        return 0;
+    }
+    match run_gpu_presentation(args) {
+        GpuVerdict::Passed(report) => {
+            println!("{}", gpu_report_line("PASS", &report));
+            0
+        }
+        GpuVerdict::Failed(report) => {
+            println!("{}", gpu_report_line("FAIL", &report));
+            1
+        }
+        GpuVerdict::Skipped(reason) => {
+            println!("SKIP {}", one_line(&reason));
+            0
+        }
+        GpuVerdict::Error(reason) => {
+            println!("FAIL {}", one_line(&reason));
+            1
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn run_gpu_presentation(args: &[String]) -> GpuVerdict {
+    use opurom_platform::{capture_window, write_png, MacHost};
+
+    let (ir, width, height, png_path) = verification_options(args);
+    let Some(renderer) = software_renderer_path() else {
+        return GpuVerdict::Skipped(
+            "the software renderer was not found; cannot produce the reference frame".to_owned(),
+        );
+    };
+    let suffix = format!("{}-{width}x{height}", std::process::id());
+    let reference_path = std::env::temp_dir().join(format!("opurom-r10-gpu-ref-{suffix}.ppm"));
+    let commands_path = std::env::temp_dir().join(format!("opurom-r10-gpu-commands-{suffix}.json"));
+    if let Err(error) = render_reference_with_commands(
+        &renderer,
+        &ir,
+        width,
+        height,
+        &reference_path,
+        &commands_path,
+    ) {
+        return GpuVerdict::Skipped(format!(
+            "the software renderer failed to produce the frame and display list: {error}"
+        ));
+    }
+    let reference = match std::env::var(REFERENCE_PPM_ENV) {
+        Ok(path) => match read_reference_ppm(Path::new(&path)) {
+            Ok(reference) => reference,
+            Err(reason) => return GpuVerdict::Skipped(reason),
+        },
+        Err(_) => match read_reference_ppm(&reference_path) {
+            Ok(reference) => reference,
+            Err(reason) => return GpuVerdict::Skipped(reason),
+        },
+    };
+    if reference.width != width || reference.height != height {
+        return GpuVerdict::Error(format!(
+            "reference PPM is {}x{}, expected {width}x{height}",
+            reference.width, reference.height
+        ));
+    }
+    let commands_json = match std::fs::read_to_string(&commands_path) {
+        Ok(json) => json,
+        Err(error) => {
+            return GpuVerdict::Skipped(format!(
+                "cannot read the generated display list {}: {error}",
+                commands_path.display()
+            ))
+        }
+    };
+
+    let host = MacHost::new(width, height, &png_path);
+    let window = match host.open_window() {
+        Ok(window) => window,
+        Err(error) => {
+            return GpuVerdict::Skipped(format!("AppKit could not open the live window: {error}"))
+        }
+    };
+    match present_display_list(&commands_json, window.metal_layer_ptr()) {
+        PresentationOutcome::Presented => {}
+        PresentationOutcome::Skipped(reason) => return GpuVerdict::Skipped(reason),
+        PresentationOutcome::Failed(reason) => return GpuVerdict::Error(reason),
+    }
+
+    window.settle();
+    let captured = match capture_window(&window) {
+        Ok(captured) => captured,
+        Err(error) => return GpuVerdict::Error(format!("cacheDisplay capture failed: {error}")),
+    };
+    if let Err(error) = write_png(captured.width, captured.height, &captured.pixels, &png_path) {
+        return GpuVerdict::Error(format!("cannot write the captured PNG: {error}"));
+    }
+    let content_height = captured.height.saturating_sub(captured.title_bar_height);
+    let content_row = captured.title_bar_height as usize * captured.width as usize * 4;
+    let Some(content_pixels) = captured.pixels.get(content_row..) else {
+        return GpuVerdict::Error("the captured window is shorter than its title bar".to_owned());
+    };
+    let content = FrameView {
+        width: captured.width,
+        height: content_height,
+        pixels: content_pixels,
+    };
+    let comparison = match compare_capture(&content, &reference) {
+        Ok(comparison) => comparison,
+        Err(error) => return GpuVerdict::Error(format!("on-screen comparison failed: {error}")),
+    };
+    let report = GpuReport {
+        captured: (captured.width, captured.height),
+        content: (captured.width, content_height),
+        title_bar: captured.title_bar_height,
+        comparison,
+        png: png_path,
+    };
+    if comparison.is_pass() {
+        GpuVerdict::Passed(report)
+    } else {
+        GpuVerdict::Failed(report)
+    }
+}
+
 /// The on-screen verification is macOS only; other hosts report SKIP.
 /// The explicit override takes precedence on every platform so CI can
 /// request a deterministic, named SKIP without depending on host detection.
 #[cfg(not(target_os = "macos"))]
 fn verify_window(_args: &[String]) -> i32 {
-    if std::env::var_os("OPR_SKIP_WINDOW").is_some() {
-        println!("SKIP OPR_SKIP_WINDOW is set");
+    if std::env::var_os(SKIP_WINDOW_ENV).is_some() {
+        println!("SKIP {SKIP_WINDOW_ENV} is set");
     } else {
         println!("SKIP the native window verification is macOS only");
+    }
+    0
+}
+
+/// The GPU drawable path is macOS/Metal only; Linux CI reports a named SKIP.
+#[cfg(not(target_os = "macos"))]
+fn verify_gpu_presentation(_args: &[String]) -> i32 {
+    if std::env::var_os(SKIP_WINDOW_ENV).is_some() {
+        println!("SKIP {SKIP_WINDOW_ENV} is set");
+    } else {
+        println!("SKIP GPU presentation is macOS/Metal only");
     }
     0
 }
@@ -298,6 +501,9 @@ fn main() {
         };
         write_test_png(path);
         return;
+    }
+    if args.iter().any(|arg| arg == "--verify-gpu-presentation") {
+        std::process::exit(verify_gpu_presentation(&args));
     }
     if args.iter().any(|arg| arg == "--verify-window") {
         std::process::exit(verify_window(&args));

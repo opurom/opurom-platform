@@ -7,6 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::gpu_presentation::workspace_root;
 use crate::pixel::{compare_rgba_to_ppm, PixelComparison};
 use crate::{AdapterError, FrameView, PpmImage};
 
@@ -88,7 +89,7 @@ pub fn software_renderer_path() -> Option<PathBuf> {
         }
         return None;
     }
-    let path = PathBuf::from("../opurom-render/target/debug/opurom-render");
+    let path = workspace_root().join("opurom-render/target/debug/opurom-render");
     path.is_file().then_some(path)
 }
 
@@ -109,6 +110,31 @@ pub fn render_reference_ppm(
     if !output.status.success() {
         return Err(AdapterError::Backend(
             "the software renderer failed to render the reference frame",
+        ));
+    }
+    Ok(())
+}
+
+/// Render the reference PPM and the exact R9 display list for the same frame.
+pub fn render_reference_with_commands(
+    renderer: &Path,
+    ir: &Path,
+    width: u32,
+    height: u32,
+    out: &Path,
+    commands: &Path,
+) -> Result<(), AdapterError> {
+    let output = std::process::Command::new(renderer)
+        .arg(ir)
+        .args([width.to_string(), height.to_string()])
+        .arg(out)
+        .arg("--commands")
+        .arg(commands)
+        .output()
+        .map_err(|_| AdapterError::Backend("the software renderer could not be started"))?;
+    if !output.status.success() {
+        return Err(AdapterError::Backend(
+            "the software renderer failed to render the reference frame and display list",
         ));
     }
     Ok(())

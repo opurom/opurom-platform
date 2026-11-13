@@ -4,13 +4,15 @@
 //! `Terminal`. R5 adds the macOS-only `MacHost` with a real AppKit/CAMetalLayer
 //! host descriptor, a headlessly verifiable PNG path and `WindowSet`. R8 adds
 //! compile-verified Win32/X11 window hosts and macOS accessibility posting.
-//! The AppKit/CoreGraphics dependencies are target-scoped, so Linux CI builds
-//! the ABI and the cross-platform hosts without AppKit. Native widget trees,
-//! GPU presentation, Wayland and HarmonyOS remain R9+.
+//! R10 adds a runtime-loaded Metal drawable presentation path for the live
+//! AppKit window. The AppKit/CoreGraphics dependencies are target-scoped, so
+//! Linux CI builds the ABI and the cross-platform hosts without AppKit. Native
+//! widget trees, Wayland and HarmonyOS remain R11+.
 
 use std::fmt;
 
 mod a11y;
+pub mod gpu_presentation;
 mod headless;
 mod pixel;
 mod png;
@@ -36,12 +38,20 @@ pub use a11y::{
     map_a11y_tree, parse_a11y_json, post_a11y_tree, A11yNode, A11yPost, AxElement, AxRole,
     DEFAULT_A11Y_TREE, SKIP_A11Y_ENV,
 };
+pub use gpu_presentation::{
+    classify, gpu_library_path, present_display_list, workspace_root, PresentationOutcome,
+    GPU_DYLIB_ENV, PRESENT_ERROR, PRESENT_INVALID_ARGUMENT, PRESENT_METAL_UNAVAILABLE,
+    PRESENT_NO_DRAWABLE, PRESENT_OK, PRESENT_UNSUPPORTED,
+};
 pub use headless::Headless;
 pub use pixel::{compare_rgba_to_ppm, PixelComparison, CHANNEL_TOLERANCE, MISMATCH_BUDGET_PERCENT};
 pub use png::frame_to_png;
 pub use ppm::{read_ppm, PpmImage};
 pub use terminal::Terminal;
-pub use verify::{compare_capture, render_reference_ppm, software_renderer_path, Verification};
+pub use verify::{
+    compare_capture, render_reference_ppm, render_reference_with_commands, software_renderer_path,
+    Verification,
+};
 pub use window_set::WindowSet;
 
 #[cfg(target_os = "macos")]
@@ -205,7 +215,9 @@ pub const RENDERER_BIN_ENV: &str = "OPUROM_RENDER_BIN";
 
 /// R5 Verified host on macOS. `native_embed` marks the real `NSView` /
 /// `CAMetalLayer` native host surface, not an embedded widget tree; `gpu` stays
-/// false because `present` writes a PNG instead of drawing to a Metal drawable.
+/// false because `PlatformAdapter::present` writes a PNG. The separate R10
+/// `--verify-gpu-presentation` CLI uses a real Metal drawable; it does not
+/// change the adapter ABI or this frozen capability row.
 /// `dpi_scale` is a documented 1.0 fallback; `appkit_capabilities()` replaces it
 /// with `NSScreen.backingScaleFactor` when that value is available.
 pub const APPKIT_SPEC: PlatformSpec = PlatformSpec {
