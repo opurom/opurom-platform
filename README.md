@@ -415,10 +415,11 @@ three times before the headless fallback takes over.
   unit tests on **every** host, including macOS. It covers the setup handshake
   message layout, the client object ID allocator, the 8-byte opcode/size header
   with its native-endian words and word-aligned padding, the string argument
-  encoding, and the `wl_shm` stride/format buffer contract. The assertions are
-  concrete wire bytes, not round-trips: for example
+  encoding, the `wl_shm` stride/format buffer contract, and the host-independent
+  event framing. The handshake assertions are concrete wire bytes: for example
   `wl_display@1.get_registry(wl_registry@2)` is
-  `01 00 00 00 01 00 0c 00 02 00 00 00` on a little-endian host.
+  `01 00 00 00 01 00 0c 00 02 00 00 00` on a little-endian host; event framing
+  is covered by fixed-table round-trip tests.
 - The Windows and X11 adapters were compiled here but not executed: there is no
   Windows host or mingw linker on this macOS machine, and there is no X server
   for a Linux window. The two target-scoped compile checks are the evidence.
@@ -449,9 +450,19 @@ libraries and the wire encoding is verified by `cargo test` everywhere.
 | Message header | `src/wayland_wire.rs` | 32-bit object ID, then a word with the size in the upper 16 bits and the opcode in the lower 16 bits, native-endian, word-aligned padding |
 | String argument | `src/wayland_wire.rs` | 32-bit length including the NUL, the bytes, then zero padding to a word boundary |
 | `wl_shm` contract | `src/wayland_wire.rs` | 32-bit `ARGB8888`/`XRGB8888` formats at four bytes per pixel, a word-aligned stride of at least `width * 4`, and a pool size of `offset + stride * height` |
+| Event framing | `src/wayland_wire.rs` | resize and press/release/move events as two-word messages, a bounded batch decoder, and fixed-table round-trip tests |
 
-The unit tests assert concrete wire bytes rather than round-trips. On a
-little-endian host the handshake is:
+Native hosts normalize resize and pointer events into the same two 32-bit
+words: Win32 packs `WM_SIZE` and `WM_LBUTTONDOWN` coordinates into `lparam`,
+while X11 reads `c_int` fields from `XEvent`. `WireEvent` frames them as
+messages on a server-owned object. Fixed tables cover resize widths 0, 1, 320,
+1600 and 4096, press/release/move at signed coordinate boundaries, and
+multi-event batches that decode back to identical values. `decode_batch` caps
+the event count and rejects a trailing partial message, so malformed or
+truncated buffers produce an `AdapterError` instead of panicking.
+
+The handshake assertions use concrete wire bytes; event framing uses
+fixed-table round-trip tests. On a little-endian host the handshake is:
 
 ```text
 01 00 00 00 01 00 0c 00 02 00 00 00   wl_display@1.get_registry(wl_registry@2)
