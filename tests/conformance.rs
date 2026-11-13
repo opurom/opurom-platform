@@ -489,6 +489,65 @@ fn terminal_key_input_round_trips_fifo() {
 }
 
 #[test]
+fn terminal_resize_moves_the_viewport_and_queues_one_event() {
+    let mut host = Terminal::new(6, 4);
+    host.push_key(65, true);
+    host.resize(size(10, 6));
+
+    assert_eq!(host.viewport(), size(10, 6));
+    assert_eq!(
+        host.poll_event(),
+        Some(InputEvent::Key {
+            code: 65,
+            pressed: true
+        }),
+        "queued input keeps its order across a resize"
+    );
+    assert_eq!(
+        host.poll_event(),
+        Some(InputEvent::Resize { size: size(10, 6) })
+    );
+    assert_eq!(host.poll_event(), None, "queue fully drained");
+    assert_eq!(host.viewport(), size(10, 6), "the new size persists");
+}
+
+#[test]
+fn terminal_draining_an_external_resize_moves_the_viewport() {
+    let mut host = Terminal::with_defaults();
+    host.push_event(InputEvent::Tap {
+        x: 1.0,
+        y: 2.0,
+        node_id: u32::MAX,
+    });
+    host.push_event(InputEvent::Resize { size: size(40, 12) });
+
+    assert_eq!(
+        host.viewport(),
+        size(80, 24),
+        "the viewport moves only when the resize drains"
+    );
+    assert_eq!(
+        host.poll_event(),
+        Some(InputEvent::Tap {
+            x: 1.0,
+            y: 2.0,
+            node_id: u32::MAX
+        })
+    );
+    assert_eq!(
+        host.viewport(),
+        size(80, 24),
+        "a tap never moves the viewport"
+    );
+    assert_eq!(
+        host.poll_event(),
+        Some(InputEvent::Resize { size: size(40, 12) })
+    );
+    assert_eq!(host.viewport(), size(40, 12));
+    assert_eq!(host.poll_event(), None, "queue fully drained");
+}
+
+#[test]
 fn terminal_is_a_verified_host_in_registry() {
     let spec = spec_by_name("terminal").expect("terminal is registered by name");
     assert_eq!(spec, TERMINAL_SPEC);
