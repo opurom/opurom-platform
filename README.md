@@ -96,9 +96,10 @@ binary), matching the X11 fix; all AppKit/Metal code is `cfg`-gated.
 
 `opuromc target <ir.json> --target native -o <dir>` generates a standalone
 Cargo project (`Cargo.toml` plus `src/main.rs`). Its `[dependencies]` point at
-the sibling `opurom-render` and `opurom-platform` crates by path, so the
-generated app renders the UI through the same renderer as every other surface
-rather than embedding a second painter.
+the sibling `opurom-render` crate by path, so the generated app renders the UI
+through the same renderer as every other surface rather than embedding a second
+painter. It depends only on `opurom-render`, which writes PPM with no external
+crates, so the generated project builds offline without a registry.
 
 At startup the app parses the embedded IR, builds a `StateView` from its
 initial state, and rasterizes one frame with `opurom_render::Renderer` into the
@@ -106,12 +107,9 @@ default viewport of **800x600** logical pixels. `OPUROM_FRAME_WIDTH` and
 `OPUROM_FRAME_HEIGHT` override the two dimensions. The rendered RGBA8 frame is
 written as a PPM file (the first positional argument, defaulting to
 `opurom-native-frame.ppm` in the system temp directory so the state-machine
-entry point never writes into the caller's directory); on macOS it is
-additionally written as a PNG through
-`opurom_platform::frame_to_png`, and any other host reports the concrete
-`AppKitUnavailable` reason instead of claiming a PNG. After rendering, the app
-keeps reading the same stdin state-machine commands (`tap`, `input`, `state`,
-`quit`) and printing patches, so the state logic is unchanged.
+entry point never writes into the caller's directory). After rendering, the
+app keeps reading the same stdin state-machine commands (`tap`, `input`,
+`state`, `quit`) and printing patches, so the state logic is unchanged.
 
 The desktop target rows (`windows`, `macos`, `linux`) in the Status table are
 `Verified` because each has a compiled-in host adapter and the native target
