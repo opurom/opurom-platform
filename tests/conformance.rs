@@ -1,7 +1,7 @@
 use opurom_platform::{
     all_platforms, host_platforms, registry, spec_by_name, AdapterError, Capabilities, FrameView,
-    Headless, InputEvent, Lifecycle, PlatformAdapter, Size, Status, Terminal, HEADLESS_SPEC,
-    TERMINAL_SPEC,
+    Headless, InputEvent, Lifecycle, PlatformAdapter, Size, Status, Terminal, WindowSet,
+    HEADLESS_SPEC, TERMINAL_SPEC,
 };
 
 /// The 14 target names required by ADAPTER_CONTRACT.md.
@@ -520,4 +520,48 @@ fn terminal_is_a_verified_host_in_registry() {
         Status::Verified,
         "existing lookup still works"
     );
+}
+
+fn size(width: u32, height: u32) -> Size {
+    Size { width, height }
+}
+
+#[test]
+fn window_set_reports_every_viewport_in_index_order() {
+    let mut windows = WindowSet::new([size(2, 1), size(1, 2), size(3, 1)]).unwrap();
+    assert_eq!(
+        windows.viewports(),
+        vec![size(2, 1), size(1, 2), size(3, 1)]
+    );
+
+    windows.resize(1, size(8, 6)).unwrap();
+    assert_eq!(
+        windows.viewports(),
+        vec![size(2, 1), size(8, 6), size(3, 1)]
+    );
+    assert_eq!(windows.len(), 3);
+}
+
+#[test]
+fn window_set_broadcast_reaches_each_window_in_isolation() {
+    let mut windows = WindowSet::new([size(1, 1); 4]).unwrap();
+    let event = InputEvent::Key {
+        code: 7,
+        pressed: true,
+    };
+    windows.broadcast_event(event.clone());
+
+    for index in 0..windows.len() {
+        assert_eq!(windows.poll_event(index), Ok(Some(event.clone())));
+        assert_eq!(windows.poll_event(index), Ok(None));
+    }
+
+    windows
+        .push_event(0, InputEvent::Lifecycle(Lifecycle::Resumed))
+        .unwrap();
+    assert_eq!(
+        windows.poll_event(0),
+        Ok(Some(InputEvent::Lifecycle(Lifecycle::Resumed)))
+    );
+    assert_eq!(windows.poll_event(1), Ok(None));
 }

@@ -29,6 +29,20 @@ impl WindowSet {
         self.windows.len()
     }
 
+    /// Viewport of every window in index order, for hosts that lay out a
+    /// multi-window surface in one pass.
+    pub fn viewports(&self) -> Vec<Size> {
+        self.windows.iter().map(Headless::viewport).collect()
+    }
+
+    /// Deliver the same normalized input to every window. Used by synchronized
+    /// multi-device debugging, where one action must reach each surface.
+    pub fn broadcast_event(&mut self, event: InputEvent) {
+        for window in &mut self.windows {
+            window.push_event(event.clone());
+        }
+    }
+
     pub fn viewport(&self, index: usize) -> Result<Size, AdapterError> {
         Ok(self.window(index)?.viewport())
     }

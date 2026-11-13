@@ -198,7 +198,7 @@ PASS window=200x150 mismatched_pixels=0 compared_pixels=30000 mismatch=0.0000% m
 tolerance above. `FAIL` means they do not; it reports the measured mismatch
 count and percentage and exits 1.
 
-**SKIP, never a fake PASS.** When the host cannot show a window - no Aqua
+**SKIP.** When the host cannot show a window - no Aqua
 session, no main screen, no window server, or not the main thread - the check
 prints `SKIP <concrete reason>` and exits **0**. The reasons are checked with
 `CGSessionCopyCurrentDictionary()` and `NSScreen.mainScreen`. The environment
@@ -365,8 +365,14 @@ return `AdapterError::Backend("WindowSet requires 2..4 viewports")`. Each
 viewport owns a separate `Headless` instance, hence its own `Size`, event FIFO
 and RGBA8 frame buffer. `resize(index, size)`, `push_event`, `poll_event`,
 `present` and `frame` operate on one index only. Any invalid index returns
-`AdapterError::Backend("invalid window index")`. This is deterministic viewport
-state, not a set of live OS windows.
+`AdapterError::Backend("invalid window index")`.
+
+`viewports()` returns every viewport size in index order for hosts that lay out
+a multi-window surface in one pass. `broadcast_event(event)` delivers one
+normalized input to every window, which supports synchronized multi-device
+debugging. Each window keeps its own event FIFO, so a subsequent per-window
+`push_event` reaches only that window. This is deterministic viewport state,
+not a set of live OS windows.
 
 ### Degradation contract
 
@@ -422,7 +428,7 @@ three times before the headless fallback takes over.
   `NSAccessibilityElement`s with `NSAccessibilityPostNotification`. It checks
   `AXIsProcessTrusted()` and `AXUIElementCreateApplication()` first. Denied
   trust reports `SKIP AXIsProcessTrusted returned false: ...`; other OS/API
-  failures report `FAIL`, never a fake `PASS`. `OPR_SKIP_A11Y=1` forces a
+  failures report `FAIL`. `OPR_SKIP_A11Y=1` forces a
   deterministic SKIP without any Accessibility API call.
 - The tree JSON has no parent ids, so the poster builds a flat AX group in
   pre-order. There is no claim of a nested AX hierarchy, VoiceOver speech
@@ -532,7 +538,6 @@ appkit | appkit | Verified | false | true | true
 ## Verify
 
 ```sh
-export PATH="$HOME/.cargo/bin:$PATH"
 cargo fmt --all
 cargo fmt --all -- --check
 RUSTFLAGS="-D warnings" cargo build --offline
