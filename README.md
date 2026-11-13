@@ -21,6 +21,7 @@ drawable and verifies the on-screen pixels.
 | headless | headless | **Verified** | false | false | false |
 | terminal | terminal | **Verified** | false | false | false |
 | appkit | appkit | **Verified** (macOS only) | false | true | true |
+| wayland | native | Planned | false | false | false |
 | android | native | Planned | false | false | false |
 | ios | native | Planned | false | false | false |
 | harmony-mobile | native | Planned | false | false | false |
@@ -61,17 +62,21 @@ The remaining target-row capability flags and `dpi_scale` values are nominal
 logical defaults, not measurements. No fps, device-matrix or benchmark claims
 are made.
 
-The native surfaces add `src/win32.rs` and `src/x11.rs` as **COMPILED, NOT EXECUTED** OS
+The native surfaces add `src/win32.rs`, `src/x11.rs` and `src/wayland.rs` as OS
 adapters. `windows-sys = "=0.52.0"` is a Windows-only dependency, so macOS and
 Linux CI never need it. X11 resolves `libX11.so.6`/`libX11.so` and its Xlib
 symbols at runtime with plain libc `dlopen`/`dlsym`; there is **no `-lX11`
 link requirement** and no X11 headers or development libraries are needed to
 build. A missing runtime library returns a documented `X11 unavailable` error.
+Wayland resolves `libwayland-client.so.0`/`libwayland-client.so` and its
+libwayland-client symbols the same way, so there is **no `-lwayland-client`
+link requirement** either; a missing runtime library returns a documented
+`Wayland unavailable` error. The Wayland wire encoding - the setup handshake,
+object ID allocation, the opcode/size header and the `wl_shm` buffer contract -
+is pure Rust in `src/wayland_wire.rs` and is unit-tested on every host.
 Both cross-target `cargo check --all-targets` commands pass. No Windows binary
 is linked (no mingw linker), and no X11 window is opened (no X server).
-Wayland, HarmonyOS, native widget embedding, full GPU UI rasterization,
-Vulkan/ANGLE/D3D backends and real device conformance are planned for later
-releases. The live-window and GPU presentation paths exercise a live GUI
+The live-window and GPU presentation paths exercise a live GUI
 session, but only on macOS and only for the single
 AppKit host below; the Linux CI runner has no window server and always reports
 SKIP. macOS a11y posting requires OS Accessibility permission. The GPU
@@ -95,6 +100,8 @@ binary), matching the X11 fix; all AppKit/Metal code is `cfg`-gated.
 | `frame_to_png(FrameView, path)` | real PNG output through a `CGImage` on macOS; documented `AppKitUnavailable` error elsewhere |
 | `open_window()` (macOS) | real `NSWindow`/`NSView`; draw, `cacheDisplay(in:to:)` capture, real PNG |
 | `compare_rgba_to_ppm` | captured window pixels vs the software renderer PPM, with a documented tolerance |
+| `wayland_wire` | pure-Rust Wayland wire encoding: setup handshake, object IDs, opcode/size header, string arguments and the `wl_shm` stride/format contract; unit-tested on every host |
+| `WaylandHost::connect()` (Linux) | runtime `dlopen`/`dlsym` of `libwayland-client.so.0`; no link-time Wayland dependency; a missing runtime library is a documented `Wayland unavailable` error |
 
 ### Headless reference adapter
 
@@ -387,9 +394,29 @@ three times before the headless fallback takes over.
   `X11 unavailable: dlopen(...) failed`; a missing symbol returns
   `X11 unavailable: libX11 is missing a required Xlib symbol`. A 24/32-bit
   TrueColor visual is also required at runtime.
-- Neither adapter was executed here. There is no Windows host or mingw linker
-  on this macOS machine, and there is no X server for a Linux window. The two
-  target-scoped compile checks are the evidence.
+- `WaylandHost::connect()` resolves `wl_display_connect`,
+  `wl_display_disconnect`, `wl_display_get_error` and `wl_display_get_fd` from
+  `libwayland-client.so.0`/`libwayland-client.so` with `dlopen`/`dlsym` at
+  runtime, so the Linux build has no `-lwayland-client` link requirement and
+  needs no Wayland headers. `handshake()` writes the setup handshake - the
+  `wl_display.get_registry` and `wl_display.sync` requests - to the
+  compositor's socket and collects the announced globals and the sync
+  callback. A missing `libwayland-client.so.0` returns
+  `Wayland unavailable: dlopen(...) failed`; a missing symbol returns
+  `Wayland unavailable: libwayland-client is missing a required symbol`.
+- The Wayland wire encoding is pure Rust in `src/wayland_wire.rs` and runs its
+  unit tests on **every** host, including macOS. It covers the setup handshake
+  message layout, the client object ID allocator, the 8-byte opcode/size header
+  with its native-endian words and word-aligned padding, the string argument
+  encoding, and the `wl_shm` stride/format buffer contract. The assertions are
+  concrete wire bytes, not round-trips: for example
+  `wl_display@1.get_registry(wl_registry@2)` is
+  `01 00 00 00 01 00 0c 00 02 00 00 00` on a little-endian host.
+- The Windows and X11 adapters were compiled here but not executed: there is no
+  Windows host or mingw linker on this macOS machine, and there is no X server
+  for a Linux window. The two target-scoped compile checks are the evidence.
+  The Wayland adapter is the same on this host - there is no Wayland
+  compositor - so `--verify-wayland` reports `SKIP` with the concrete reason.
 - `--post-a11y [tree.json]` parses the renderer's deterministic accessibility tree JSON,
   maps visible nodes to AX roles, labels and bottom-left frames, then posts
   `NSAccessibilityElement`s with `NSAccessibilityPostNotification`. It checks
@@ -401,6 +428,42 @@ three times before the headless fallback takes over.
   pre-order. There is no claim of a nested AX hierarchy, VoiceOver speech
   verification or native widget embedding. The pure parser/mapping tests need
   no OS permission.
+
+### Wayland wire adapter
+
+The Wayland client adapter follows the X11 pattern: `libwayland-client` is
+opened at runtime, so the crate builds on a host without Wayland development
+libraries and the wire encoding is verified by `cargo test` everywhere.
+
+| Piece | Where | What it does |
+| --- | --- | --- |
+| Runtime loader | `src/wayland.rs` | `dlopen`/`dlsym` of `wl_display_connect`, `wl_display_disconnect`, `wl_display_get_error`, `wl_display_get_fd`; no link-time dependency |
+| Setup handshake | `src/wayland_wire.rs` | `wl_display.get_registry` + `wl_display.sync` requests, client object IDs from 2 upwards |
+| Message header | `src/wayland_wire.rs` | 32-bit object ID, then a word with the size in the upper 16 bits and the opcode in the lower 16 bits, native-endian, word-aligned padding |
+| String argument | `src/wayland_wire.rs` | 32-bit length including the NUL, the bytes, then zero padding to a word boundary |
+| `wl_shm` contract | `src/wayland_wire.rs` | 32-bit `ARGB8888`/`XRGB8888` formats at four bytes per pixel, a word-aligned stride of at least `width * 4`, and a pool size of `offset + stride * height` |
+
+The unit tests assert concrete wire bytes rather than round-trips. On a
+little-endian host the handshake is:
+
+```text
+01 00 00 00 01 00 0c 00 02 00 00 00   wl_display@1.get_registry(wl_registry@2)
+01 00 00 00 00 00 0c 00 03 00 00 00   wl_display@1.sync(wl_callback@3)
+```
+
+`--verify-wayland` reports the live status. Without a compositor it prints
+`SKIP <concrete reason>` and exits **0**; it never claims a PASS:
+
+```sh
+cargo run --quiet --offline -- --verify-wayland
+# SKIP WAYLAND_DISPLAY is not set
+```
+
+The `wayland` registry row stays `Planned` until a live compositor has been
+exercised: the wire encoding, the loader and the handshake are implemented and
+unit-tested, while a presented surface needs a running compositor. The row is
+reachable through `spec_by_name("wayland")` on every host and stays out of the
+frozen 14-row target listing.
 
 ## Standard new-platform checklist
 
@@ -454,6 +517,11 @@ path it uses the checked-in renderer-tree fixture. It prints
 when Accessibility trust is denied or `OPR_SKIP_A11Y=1` is set. A parse or API
 failure prints `FAIL <reason>` and exits 1. PASS and SKIP exit 0.
 
+`--verify-wayland` reports the live Wayland status. It prints
+`PASS wayland globals=N callback_done=true` after a real handshake with the
+compositor, or `SKIP <concrete reason>` when `WAYLAND_DISPLAY` is missing, the
+runtime library is absent or the compositor cannot be reached. SKIP exits 0.
+
 ```text
 name | emitter | status | gpu | native_embed | multi_window
 headless | headless | Verified | false | false | false
@@ -475,6 +543,7 @@ cargo run --quiet --offline -- --verify-window --out /tmp/opurom-window.png
 cargo run --quiet --offline -- --verify-gpu-presentation --out /tmp/opurom-gpu-presentation.png
 cargo run --quiet --offline -- --verify-gpu-animation-loop --out /tmp/opurom-gpu-animation-loop.png
 cargo run --quiet --offline -- --post-a11y
+cargo run --quiet --offline -- --verify-wayland
 RUSTFLAGS="-D warnings" cargo check --offline --all-targets --target x86_64-pc-windows-gnu
 RUSTFLAGS="-D warnings" cargo check --offline --all-targets --target x86_64-unknown-linux-gnu
 ```
@@ -483,16 +552,22 @@ From the umbrella root the built CLI can be invoked directly as
 `./opurom-platform/target/debug/opurom-platform --verify-gpu-presentation --out /tmp/opurom-gpu-presentation.png`;
 the renderer, IR and GPU dylib paths are absolute and CWD-independent.
 
-`cargo test --offline` runs **71 tests** on macOS: 25 library unit tests
-(including four pure animation-loop checks), two accessibility tests, eleven
+`cargo test --offline` runs **85 tests** on macOS: 36 library unit tests
+(including four pure animation-loop checks and eleven pure Wayland wire checks),
+two accessibility tests, eleven
 AppKit host tests, two CLI tests, sixteen conformance tests, seven
 animation-loop integration tests, four GPU presentation integration tests
-(presentation-on-screen, forced SKIP, missing-dylib SKIP and status honesty)
-and four native-window tests.
-Win32 adds two and X11 adds three pure unit tests that are compiled, not
+(presentation-on-screen, forced SKIP, missing-dylib SKIP and status honesty),
+four native-window tests and three Wayland integration tests
+(missing display, empty display and a named display without a compositor).
+Win32 adds two, X11 adds three and Wayland adds one pure unit test that are
+compiled, not
 executed, by their target's `--all-targets` check. The Linux source has no
 `#[link(name = "X11")]` attribute and therefore no `-lX11` link requirement;
-Xlib is loaded only by `X11Host::open()`. The GPU presentation bridge likewise has no
+Xlib is loaded only by `X11Host::open()`. It has no
+`#[link(name = "wayland-client")]` attribute and therefore no
+`-lwayland-client` link requirement either; libwayland-client is loaded only by
+`WaylandHost::connect()`. The GPU presentation bridge likewise has no
 `#[link(name = "Metal", kind = "framework")]` in this crate; Metal lives in
 the runtime-loaded GPU dylib. `cargo fmt --all`, `cargo build --offline` and
 `cargo test --offline` produce zero warnings on macOS with
@@ -501,5 +576,6 @@ Windows `.exe` or Linux X11 binary is linked here.
 
 On a host with a GUI session `--verify-window` and
 `--verify-gpu-presentation` report `PASS` with the measured numbers. On a
-headless host they report `SKIP <reason>` and exit 0. The three V0.1 golden
-digests remain unchanged.
+headless host they report `SKIP <reason>` and exit 0. `--verify-wayland`
+reports `SKIP <reason>` and exits 0 on a host without a compositor. The three
+V0.1 golden digests remain unchanged.

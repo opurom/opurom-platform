@@ -3,11 +3,11 @@
 //! `Headless` is the v0.1 reference adapter and conformance oracle; the terminal host adds
 //! `Terminal`. The macOS host adds the `MacHost` with a real AppKit/CAMetalLayer
 //! host descriptor, a headlessly verifiable PNG path and `WindowSet`. The native surfaces
-//! add compile-verified Win32/X11 window hosts and macOS accessibility posting.
+//! add compile-verified Win32/X11 window hosts, a runtime-loaded Wayland client
+//! adapter with a host-independent wire encoder, and macOS accessibility posting.
 //! The GPU presentation path adds a runtime-loaded Metal drawable presentation for the live
 //! AppKit window. The AppKit/CoreGraphics dependencies are target-scoped, so
-//! Linux CI builds the ABI and the cross-platform hosts without AppKit. Native
-//! widget trees, Wayland and HarmonyOS are planned for later releases.
+//! Linux CI builds the ABI and the cross-platform hosts without AppKit.
 
 use std::fmt;
 
@@ -25,11 +25,18 @@ mod window_set;
 // host; excluded from non-Linux production builds to avoid dead-code warnings.
 #[cfg(any(target_os = "linux", test))]
 mod x11_pixels;
+// Pure Wayland wire encoding: the handshake, object IDs, the opcode/size
+// header and the wl_shm buffer contract. Verified by `cargo test` on every
+// host, including macOS workstations without a Wayland compositor.
+#[cfg(any(target_os = "linux", test))]
+pub mod wayland_wire;
 
 #[cfg(target_os = "macos")]
 mod appkit;
 #[cfg(target_os = "macos")]
 mod core_graphics_bridge;
+#[cfg(target_os = "linux")]
+mod wayland;
 #[cfg(target_os = "windows")]
 mod win32;
 #[cfg(target_os = "linux")]
@@ -61,6 +68,8 @@ pub use appkit::{
     capture_window, draw_and_capture, window_availability, write_png, CapturedWindow, MacHost,
     MacHostDescriptor, MacWindow, WindowUnavailable,
 };
+#[cfg(target_os = "linux")]
+pub use wayland::{Handshake, WaylandHost};
 #[cfg(target_os = "windows")]
 pub use win32::Win32Host;
 #[cfg(target_os = "linux")]
@@ -207,6 +216,19 @@ pub const APPKIT_UNAVAILABLE: &str = "AppKitUnavailable: frame_to_png requires m
 /// sets `OPR_SKIP_WINDOW=1` so a headless runner never claims a PASS.
 pub const SKIP_WINDOW_ENV: &str = "OPR_SKIP_WINDOW";
 
+/// The environment variable that names the Wayland compositor socket.
+pub const WAYLAND_DISPLAY_ENV: &str = "WAYLAND_DISPLAY";
+
+/// The concrete reason a Wayland check cannot run, or `None` when a display is
+/// named. A missing or empty display is a SKIP, never a fake PASS.
+pub fn wayland_skip_reason(display: Option<&str>) -> Option<&'static str> {
+    match display {
+        None => Some("WAYLAND_DISPLAY is not set"),
+        Some(value) if value.trim().is_empty() => Some("WAYLAND_DISPLAY is empty"),
+        Some(_) => None,
+    }
+}
+
 /// Environment override that points the verification at a pre-rendered
 /// software-renderer PPM instead of running the renderer itself.
 pub const REFERENCE_PPM_ENV: &str = "OPR_REFERENCE_PPM";
@@ -246,6 +268,17 @@ const fn caps(multi_window: bool, lifecycle: bool, dpi_scale: f32) -> Capabiliti
         dpi_scale,
     }
 }
+
+/// The Wayland client host row (TRANSPORT_AND_LANGUAGE_ADDITIONS.md section 4).
+/// The wire encoder, the runtime `dlopen`/`dlsym` loader and the setup
+/// handshake are implemented and unit-tested; a live surface needs a running
+/// compositor, so the row stays `Planned` until one is available.
+pub const WAYLAND_SPEC: PlatformSpec = PlatformSpec {
+    name: "wayland",
+    emitter: "native",
+    capabilities: caps(false, false, 1.0),
+    status: Status::Planned,
+};
 
 // `Scaffold` = a known emitter with a registry row, no runtime adapter yet.
 // `Planned` = no dedicated target emitter yet. Neither is implemented.
@@ -380,10 +413,11 @@ pub fn host_platforms() -> Vec<PlatformSpec> {
 }
 
 /// Query any known platform by name: the 14 targets, the headless oracle, the
-/// the terminal host and (on macOS) the AppKit host.
+/// the terminal host, the Wayland host row and (on macOS) the AppKit host.
 pub fn spec_by_name(name: &str) -> Option<PlatformSpec> {
     let mut known = all_platforms();
     known.push(TERMINAL_SPEC.clone());
+    known.push(WAYLAND_SPEC.clone());
     #[cfg(target_os = "macos")]
     known.push(appkit_spec());
     known.into_iter().find(|spec| spec.name == name)
