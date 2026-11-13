@@ -1,4 +1,4 @@
-//! R8 accessibility tree mapping and macOS screen-reader posting.
+//! Accessibility tree mapping and macOS screen-reader posting.
 //!
 //! Parsing and tree-to-AX mapping are pure data operations and need no OS
 //! permission. `post_a11y_tree` checks Accessibility trust before calling
@@ -6,15 +6,15 @@
 
 use crate::AdapterError;
 
-const INVALID_TREE: &str = "invalid R3 a11y tree JSON";
+const INVALID_TREE: &str = "invalid accessibility tree JSON";
 pub const SKIP_A11Y_ENV: &str = "OPR_SKIP_A11Y";
-pub const DEFAULT_A11Y_TREE: &str = include_str!("../tests/fixtures/r8-a11y.json");
+pub const DEFAULT_A11Y_TREE: &str = include_str!("../tests/fixtures/a11y-tree.json");
 
 fn invalid<T>() -> Result<T, AdapterError> {
     Err(AdapterError::Backend(INVALID_TREE))
 }
 
-/// Roles from R3_ADDENDUM.md section 2, mapped to AppKit accessibility roles.
+/// Roles from COMPONENTS_AND_A11Y.md section 2, mapped to AppKit accessibility roles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AxRole {
     Button,
@@ -201,7 +201,7 @@ fn parse_bool(rest: &str) -> Result<bool, AdapterError> {
     }
 }
 
-/// Read the renderer's deterministic one-object-per-line R3 a11y JSON.
+/// Read the renderer's deterministic one-object-per-line accessibility tree JSON.
 /// Unknown roles and malformed fields are errors, not silent guesses.
 pub fn parse_a11y_json(text: &str) -> Result<Vec<A11yNode>, AdapterError> {
     let mut nodes = Vec::new();
@@ -231,8 +231,8 @@ pub fn parse_a11y_json(text: &str) -> Result<Vec<A11yNode>, AdapterError> {
     Ok(nodes)
 }
 
-/// Map the flat pre-order renderer tree to visible AX elements. The R3 JSON
-/// has no parent ids, so R8 posts a flat group; nested hierarchy stays R9+.
+/// Map the flat pre-order renderer tree to visible AX elements. The tree JSON has no
+/// parent ids, so the poster builds a flat group; a nested hierarchy is not supported.
 pub fn map_a11y_tree(nodes: &[A11yNode]) -> Vec<AxElement> {
     let root_height = nodes.first().map_or(0, |node| node.bounds[3]);
     nodes

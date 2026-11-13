@@ -1,9 +1,9 @@
-//! R10: real Metal drawable presentation with on-screen verification.
+//! Real Metal drawable presentation with on-screen verification.
 //!
 //! The headline test drives `--verify-gpu-presentation`: a live AppKit window
-//! receives the R9 compute buffer through a real `MTLBlitCommandEncoder`,
+//! receives the GPU compute buffer through a real `MTLBlitCommandEncoder`,
 //! `presentDrawable` and `commit`, then `cacheDisplay(in:to:)` captures the
-//! presented frame for the R7 tolerance comparison. A host without an Aqua
+//! presented frame for the tolerance comparison. A host without an Aqua
 //! session, a Metal device, a drawable or the GPU dylib reports `SKIP <reason>`
 //! and exits 0; it never claims a PASS.
 
@@ -20,7 +20,7 @@ const COUNTER_IR: &str = "../opurom-spec/counter.opuir.json";
 const WIDTH: u32 = 200;
 const HEIGHT: u32 = 150;
 
-/// Absolute path to the built CLI, as in `tests/r7.rs`.
+/// Absolute path to the built CLI, as in `tests/native_window.rs`.
 fn binary() -> PathBuf {
     option_env!("CARGO_BIN_EXE_opurom_platform")
         .or_else(|| option_env!("CARGO_BIN_EXE_opurom-platform"))
@@ -64,10 +64,7 @@ fn run_gpu(out: &Path, dylib: Option<&str>) -> (String, i32) {
 /// The presentation test: real blit/present plus a real on-screen comparison.
 #[test]
 fn gpu_presentation_matches_the_software_renderer_on_screen() {
-    let out = std::env::temp_dir().join(format!(
-        "opurom-platform-r10-gpu-{}.png",
-        std::process::id()
-    ));
+    let out = std::env::temp_dir().join(format!("opurom-platform-gpu-{}.png", std::process::id()));
     let _ = std::fs::remove_file(&out);
     let (stdout, code) = run_gpu(&out, None);
     let stdout = stdout.trim().to_string();
@@ -124,7 +121,7 @@ fn gpu_presentation_matches_the_software_renderer_on_screen() {
         return;
     };
     let reference_path = std::env::temp_dir().join(format!(
-        "opurom-platform-r10-ref-{}.ppm",
+        "opurom-platform-gpu-ref-{}.ppm",
         std::process::id()
     ));
     let render = Command::new(&renderer)
@@ -160,7 +157,7 @@ fn gpu_presentation_matches_the_software_renderer_on_screen() {
     );
     assert!(
         comparison.is_pass(),
-        "the presented frame must match the software renderer within the R7 tolerance: {comparison:?}"
+        "the presented frame must match the software renderer within the documented tolerance: {comparison:?}"
     );
 
     let _ = std::fs::remove_file(&out);
@@ -171,7 +168,7 @@ fn gpu_presentation_matches_the_software_renderer_on_screen() {
 #[test]
 fn the_skip_override_forces_a_gpu_skip_and_exits_zero() {
     let out = std::env::temp_dir().join(format!(
-        "opurom-platform-r10-skip-{}.png",
+        "opurom-platform-gpu-skip-{}.png",
         std::process::id()
     ));
     let _ = std::fs::remove_file(&out);
@@ -205,7 +202,7 @@ fn the_skip_override_forces_a_gpu_skip_and_exits_zero() {
 #[test]
 fn a_missing_gpu_dylib_is_a_concrete_skip() {
     let out = std::env::temp_dir().join(format!(
-        "opurom-platform-r10-nodylib-{}.png",
+        "opurom-platform-gpu-nodylib-{}.png",
         std::process::id()
     ));
     let _ = std::fs::remove_file(&out);

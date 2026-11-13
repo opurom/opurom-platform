@@ -245,7 +245,7 @@ fn render_frame_png(ir: &Path, width: u32, height: u32) -> Result<Vec<u8>, Strin
     Ok(pixels)
 }
 
-/// R10: present the R9 GPU frame into a real drawable and verify on-screen pixels.
+/// Present the GPU frame into a real drawable and verify the on-screen pixels.
 #[cfg(target_os = "macos")]
 fn one_line(text: &str) -> String {
     text.lines()
@@ -339,8 +339,8 @@ fn run_gpu_presentation(args: &[String]) -> GpuVerdict {
         );
     };
     let suffix = format!("{}-{width}x{height}", std::process::id());
-    let reference_path = std::env::temp_dir().join(format!("opurom-r10-gpu-ref-{suffix}.ppm"));
-    let commands_path = std::env::temp_dir().join(format!("opurom-r10-gpu-commands-{suffix}.json"));
+    let reference_path = std::env::temp_dir().join(format!("opurom-gpu-ref-{suffix}.ppm"));
+    let commands_path = std::env::temp_dir().join(format!("opurom-gpu-commands-{suffix}.json"));
     if let Err(error) = render_reference_with_commands(
         &renderer,
         &ir,
@@ -452,7 +452,7 @@ fn verify_gpu_presentation(_args: &[String]) -> i32 {
     0
 }
 
-/// Post the R3 a11y tree to the macOS screen-reader APIs. `PASS` and a
+/// Post the accessibility tree to the macOS screen-reader APIs. `PASS` and a
 /// concrete `SKIP` exit 0; a mapping or OS API failure is a `FAIL`.
 fn post_a11y(args: &[String]) -> i32 {
     let supplied = args

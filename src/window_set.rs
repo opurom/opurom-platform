@@ -1,4 +1,4 @@
-//! Deterministic 2..4 viewport state shared by the R5 multi-window host.
+//! Deterministic 2..4 viewport state shared by the multi-window host.
 
 use crate::{AdapterError, FrameView, Headless, InputEvent, PlatformAdapter, Size};
 

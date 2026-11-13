@@ -1,4 +1,4 @@
-//! R7: live native window with on-screen pixel verification.
+//! Live native window with on-screen pixel verification.
 //!
 //! The headline test opens a REAL AppKit window, captures its own pixels with
 //! `cacheDisplay(in:to:)` and compares them against the software renderer's
@@ -59,10 +59,8 @@ fn run_verification(out: &Path) -> (String, i32) {
 /// comparison against the software renderer.
 #[test]
 fn live_window_pixels_match_the_software_renderer() {
-    let out = std::env::temp_dir().join(format!(
-        "opurom-platform-r7-window-{}.png",
-        std::process::id()
-    ));
+    let out =
+        std::env::temp_dir().join(format!("opurom-platform-window-{}.png", std::process::id()));
 
     let (stdout, code) = run_verification(&out);
     let stdout = stdout.trim().to_string();
@@ -104,8 +102,10 @@ fn live_window_pixels_match_the_software_renderer() {
         let _ = std::fs::remove_file(&out);
         return;
     };
-    let reference_path =
-        std::env::temp_dir().join(format!("opurom-platform-r7-ref-{}.ppm", std::process::id()));
+    let reference_path = std::env::temp_dir().join(format!(
+        "opurom-platform-window-ref-{}.ppm",
+        std::process::id()
+    ));
     let render = Command::new(&renderer)
         .arg(COUNTER_IR)
         .args([WIDTH.to_string(), HEIGHT.to_string()])
@@ -155,7 +155,7 @@ fn live_window_pixels_match_the_software_renderer() {
 #[test]
 fn the_skip_override_forces_a_skip_and_exits_zero() {
     let out = std::env::temp_dir().join(format!(
-        "opurom-platform-r7-skip-{}.png",
+        "opurom-platform-window-skip-{}.png",
         std::process::id()
     ));
     let output = Command::new(binary())

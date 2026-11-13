@@ -1,11 +1,11 @@
-//! Real AppKit host descriptor and live-window entry point (R5_ADDENDUM.md section 2).
+//! Real AppKit host descriptor and live-window entry point (GPU_WINDOW_TRANSPORT.md section 2).
 //!
 //! `MacHost::describe()` and the pure `frame_to_png` path are safe to exercise
 //! headlessly. `MacHost::open_window()` creates an actual `NSApplication`,
 //! `NSWindow`, `NSView` and `CAMetalLayer`; it requires the macOS main thread
 //! and a GUI (Aqua) session.
 //!
-//! R7 adds the real capture path: `open_window()` draws the frame into the
+//! The live-window path adds the real capture: `open_window()` draws the frame into the
 //! window, lets AppKit composite it, captures the window's own pixels with
 //! `cacheDisplay(in:to:)` and writes a real PNG.
 

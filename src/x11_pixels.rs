@@ -1,4 +1,4 @@
-//! Pure pixel maths for the X11 adapter (R8_ADDENDUM.md section 3).
+//! Pure pixel maths for the X11 adapter (BROWSER_AND_NATIVE_SURFACES.md section 3).
 //!
 //! Kept outside the Linux-gated `x11` module so the arithmetic is verified by
 //! `cargo test` on every host, including CI runners and macOS workstations.

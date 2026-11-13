@@ -1,4 +1,4 @@
-//! Terminal host adapter (R3_ADDENDUM.md section 6): deterministic truecolor ANSI
+//! Terminal host adapter (COMPONENTS_AND_A11Y.md section 6): deterministic truecolor ANSI
 //! half-block presentation of an RGBA frame. This is a thin host adapter that
 //! demonstrates the platform boundary; it is NOT a Metal/Vulkan/ANGLE GPU backend.
 

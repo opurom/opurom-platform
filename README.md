@@ -1,20 +1,20 @@
-# opurom-platform - Platform Adapter ABI v0.1 + R10 GPU presentation
+# opurom-platform - Platform Adapter ABI v0.1 + GPU presentation
 
 Independent Rust crate implementing the normative
 [ADAPTER_CONTRACT.md](../opurom-spec/ADAPTER_CONTRACT.md). The ABI, registry,
 `Headless`, `Terminal` and `WindowSet` remain pure Rust. PNG encoding uses the
 cached `png` crate; macOS AppKit/CoreGraphics dependencies are target-scoped,
-so Linux CI builds the crate without AppKit. R5 adds a real macOS `NSApplication`
+so Linux CI builds the crate without AppKit. The macOS host adds a real `NSApplication`
 / `NSWindow` / `NSView` host descriptor with a `CAMetalLayer`-compatible surface,
 a headlessly verifiable RGBA8-to-PNG path and deterministic multi-window state.
-R7 turns `open_window()` into a **tested entry point**: it opens a real AppKit
+The live-window path turns `open_window()` into a **tested entry point**: it opens a real AppKit
 window, captures the window's own pixels with `cacheDisplay(in:to:)` and
-compares them against the software renderer. R8 adds compile-verified Win32
-and X11 window hosts plus permission-aware macOS accessibility posting. R10
-presents the R9 GPU compute buffer into that live window's `CAMetalLayer`
+compares them against the software renderer. The native surfaces add compile-verified Win32
+and X11 window hosts plus permission-aware macOS accessibility posting. The GPU
+presentation path presents the GPU compute buffer into that live window's `CAMetalLayer`
 drawable and verifies the on-screen pixels.
 
-## Status (honest, R10)
+## Status
 
 | name | emitter | status | gpu | native_embed | multi_window |
 | --- | --- | --- | --- | --- | --- |
@@ -39,8 +39,8 @@ drawable and verifies the on-screen pixels.
 `registry()` still returns the **14 target rows** named by ADAPTER_CONTRACT.md,
 each unique and each `Scaffold` or `Planned`; the `macos` target row remains
 `Planned`. `all_platforms()` is still the frozen v0.1 listing (`headless` + the
-14 targets = 15, one `Verified`), so the R2 regression oracle is unchanged. The
-`Verified` rows above are **host adapters**, not target emitters. The R8
+14 targets = 15, one `Verified`), so the regression oracle is unchanged. The
+`Verified` rows above are **host adapters**, not target emitters. The
 `Win32Host` and `X11Host` are compile-only host adapters behind their OS
 `cfg`s; they are deliberately absent from `host_platforms()` and the `windows`
 / `linux` target rows stay `Planned` because no window was executed.
@@ -50,8 +50,8 @@ also reachable through `spec_by_name("appkit")` on macOS.
 
 `APPKIT_SPEC.native_embed: true` reports the real `NSView` / `CAMetalLayer`
 native host surface. It does **not** claim an embedded AppKit control/widget
-tree: R5 embeds no native widgets. `gpu` stays `false` for the adapter because
-`PlatformAdapter::present` writes a PNG. R10 adds a **separate, real** Metal
+tree: the AppKit host embeds no native widgets. `gpu` stays `false` for the adapter because
+`PlatformAdapter::present` writes a PNG. The GPU presentation path adds a **separate, real** Metal
 drawable path through `--verify-gpu-presentation`; it does not change the frozen
 capability row. `appkit_capabilities()` reports
 `NSScreen.backingScaleFactor` on the macOS main thread when a screen is
@@ -61,7 +61,7 @@ The remaining target-row capability flags and `dpi_scale` values are nominal
 logical defaults, not measurements. No fps, device-matrix or benchmark claims
 are made.
 
-R8 adds `src/win32.rs` and `src/x11.rs` as **COMPILED, NOT EXECUTED** OS
+The native surfaces add `src/win32.rs` and `src/x11.rs` as **COMPILED, NOT EXECUTED** OS
 adapters. `windows-sys = "=0.52.0"` is a Windows-only dependency, so macOS and
 Linux CI never need it. X11 resolves `libX11.so.6`/`libX11.so` and its Xlib
 symbols at runtime with plain libc `dlopen`/`dlsym`; there is **no `-lX11`
@@ -70,12 +70,13 @@ build. A missing runtime library returns a documented `X11 unavailable` error.
 Both cross-target `cargo check --all-targets` commands pass. No Windows binary
 is linked (no mingw linker), and no X11 window is opened (no X server).
 Wayland, HarmonyOS, native widget embedding, full GPU UI rasterization,
-Vulkan/ANGLE/D3D backends and real device conformance remain **R11+**. R7 and
-R10 exercise a live GUI session, but only on macOS and only for the single
+Vulkan/ANGLE/D3D backends and real device conformance are planned for later
+releases. The live-window and GPU presentation paths exercise a live GUI
+session, but only on macOS and only for the single
 AppKit host below; the Linux CI runner has no window server and always reports
-SKIP. macOS a11y posting requires OS Accessibility permission. The R10 GPU
+SKIP. macOS a11y posting requires OS Accessibility permission. The GPU
 bridge also uses runtime `dlopen`/`dlsym` (no `-framework Metal` link in this
-binary), matching the R8 X11 fix; all AppKit/Metal code is `cfg`-gated.
+binary), matching the X11 fix; all AppKit/Metal code is `cfg`-gated.
 
 ## ABI summary
 
@@ -111,7 +112,7 @@ hosts so golden-pixel tests can assert byte-identical output. It is a checksum, 
 a cryptographic hash - the spec's "sha256-like" only requires stability. Upgrade to a
 real digest if golden hashes ever need collision resistance.
 
-### Terminal host adapter (R3, Verified)
+### Terminal host adapter (Verified)
 
 `Terminal` implements the same `PlatformAdapter` trait with deterministic
 truecolor ANSI half-block output. It is a thin host adapter, not an OS window or
@@ -120,7 +121,7 @@ rows per character row; `last_output()` / `render_text()` expose the exact ANSI
 bytes. `push_key`, `push_input` and `push_event` queue normalized input;
 `poll_event()` drains FIFO. Its capabilities are all false with `dpi_scale: 1.0`.
 
-### AppKit host adapter (R5, Verified on macOS)
+### AppKit host adapter (Verified on macOS)
 
 `src/appkit.rs` uses `objc2-app-kit` 0.3.2 and `objc2-quartz-core` 0.3.2 to
 describe a real AppKit host. `MacHost::describe()` reads the Objective-C class
@@ -141,7 +142,7 @@ frame buffer. `present(FrameView)` calls `frame_to_png`, then stores the frame
 and digest; an invalid frame leaves both state and any previous PNG untouched.
 `capabilities()` uses the real/fallback DPI scale described above.
 
-### Live window and on-screen pixel verification (R7)
+### Live window and on-screen pixel verification
 
 `open_window()` is a **real, tested** entry point on macOS. The pipeline is:
 
@@ -206,50 +207,43 @@ software renderer binary (default `../opurom-render/target/debug/opurom-render`)
 and `OPR_REFERENCE_PPM` supplies a pre-rendered reference PPM instead of
 running the renderer.
 
-The measured R7 result on the reference host (macOS arm64, 200x150 frame) is
+The measured live-window result on the reference host (macOS arm64, 200x150 frame) is
 **200x182 captured pixels** (32 px of system title bar above the 200x150
 content), **0 mismatching pixels out of 30 000 compared**, and a maximum
 per-channel delta of **25**.
 
-#### R7 scope (honest)
+The live window is macOS-only; on other platforms the check reports SKIP with
+that reason. `WindowSet` is deterministic viewport state, not a set of live OS
+windows, and the window is created on the main screen only. The capture uses
+the display profile, so the tolerance absorbs the colour shift rather than
+correcting it. `native_embed: true` reports the real `NSView`/`CAMetalLayer`
+host surface; no AppKit controls are embedded. The live-window path draws a CPU
+`CGImage` into the layer (`gpu` stays `false`); the separate real drawable
+path is described below.
 
-- **macOS only.** The live window and the pixel verification do not exist on
-  other platforms; they report SKIP with that reason.
-- **One window at a time in R7.** `WindowSet` is still deterministic viewport
-  state, not a set of live OS windows.
-- **No multi-display.** The window is created on the main screen only.
-- **No HiDPI colour management beyond the system default.** The capture uses
-  the display profile; the tolerance absorbs the shift, it does not correct it.
-- **No native widget embedding.** `native_embed: true` reports the real
-  `NSView`/`CAMetalLayer` host surface; no AppKit controls are embedded.
-- **No live Windows, Linux or Harmony window in R7**; R8 adds compile-only
-  Win32/X11 adapters, Harmony remains R11+. R7 itself draws a CPU `CGImage`
-  into the layer and has no GPU rasterization or Metal drawable presentation
-  (`gpu` stays `false`); R10 adds the separate real drawable path below.
-
-### Real GPU presentation and on-screen verification (R10)
+### Real GPU presentation and on-screen verification
 
 `--verify-gpu-presentation` is the project's first real GPU presentation.
 It runs on the process main thread (AppKit window creation) and uses the same
-live `NSWindow`/`NSView`/`CAMetalLayer` surface as R7:
+live `NSWindow`/`NSView`/`CAMetalLayer` surface as the live-window path:
 
 1. `--verify-gpu-presentation` resolves the sibling renderer, IR and GPU dylib
    from this crate's manifest, so the command works from the umbrella root. The
-   software renderer emits both the reference PPM and the exact R9 display-list
+   software renderer emits both the reference PPM and the exact display-list
    JSON for the same frame.
 2. `src/gpu_presentation.rs` loads
    `../opurom-gpu/target/debug/libopurom_gpu.dylib` at runtime with
    `dlopen`/`dlsym` and calls its `opr_present_display_list` C ABI. This binary
    has no `objc2-metal` dependency and no `-framework Metal` link requirement;
    Linux CI builds the pure-Rust status/path logic only.
-3. The GPU crate runs the R9 compute passes, retains the final `MTLBuffer`,
+3. The GPU crate runs the compute passes, retains the final `MTLBuffer`,
    obtains `nextDrawable()` from the live `CAMetalLayer`, blits the buffer into
    the drawable texture with a real `MTLBlitCommandEncoder`, calls
    `presentDrawable`, commits and waits for completion. No CPU `CGImage` is
    substituted for this path. The presented drawable's own IOSurface is exposed
    as layer contents (zero-copy) because Core Animation's offscreen
    `cacheDisplay(in:to:)` cannot see window-server drawable content directly.
-4. `cacheDisplay(in:to:)` captures the whole window as R7 does, the PNG is
+4. `cacheDisplay(in:to:)` captures the whole window, the PNG is
    written, and the **content region** (title bar excluded) is compared with the
    software renderer using `CHANNEL_TOLERANCE = 32` and
    `MISMATCH_BUDGET_PERCENT = 2.0`.
@@ -258,8 +252,8 @@ Run it from the umbrella root (or from this crate):
 
 ```sh
 ./opurom-platform/target/debug/opurom-platform \
-  --verify-gpu-presentation --out /tmp/opurom-r10-gpu.png
-# PASS backend=metal-blit captured=200x182 content=200x150 title_bar=32 mismatched_pixels=0 compared_pixels=30000 mismatch=0.0000% max_channel_delta=25 tolerance=32 budget=2.0% png=/tmp/opurom-r10-gpu.png
+  --verify-gpu-presentation --out /tmp/opurom-gpu-presentation.png
+# PASS backend=metal-blit captured=200x182 content=200x150 title_bar=32 mismatched_pixels=0 compared_pixels=30000 mismatch=0.0000% max_channel_delta=25 tolerance=32 budget=2.0% png=/tmp/opurom-gpu-presentation.png
 ```
 
 `PASS` prints the measured mismatch count; `FAIL` prints them and exits 1.
@@ -273,12 +267,13 @@ Never a fake PASS.
 
 Measured on the reference host (macOS arm64, Apple M6, 200x150 frame):
 **200x182 PNG** (32 px title bar + 200x150 content), **0 mismatching pixels
-of 30 000** (0.0000 %), max channel delta 25, **PASS**. The R10 integration
-test decodes that PNG independently and repeats the R7-tolerance comparison.
+of 30 000** (0.0000 %), max channel delta 25, **PASS**. The GPU presentation
+integration test decodes that PNG independently and repeats the tolerance
+comparison.
 
-**Honest scope:** macOS/Metal only, one window and one presented frame, no
-Vulkan/ANGLE/D3D, no GPU text shaping, no measured fps claim, no device
-conformance matrix. `APPKIT_SPEC.gpu` stays `false` because the adapter's
+The path is macOS/Metal only: one window, one presented frame, no
+Vulkan/ANGLE/D3D, no GPU text shaping and no measured fps claim.
+`APPKIT_SPEC.gpu` stays `false` because the adapter's
 `present` method is unchanged; the real drawable path is this separate CLI.
 `cacheDisplay` sees the exact presented IOSurface, not a CPU re-render of the
 software frame.
@@ -319,14 +314,14 @@ swaps in `Headless` and keeps the app alive. `tests/conformance.rs` demonstrates
 this with a `Flaky` mock adapter returning `Err(AdapterError::Backend(..))`
 three times before the headless fallback takes over.
 
-### R8 Windows, Linux and accessibility surfaces (compile-verified)
+### Windows, Linux and accessibility surfaces (compile-verified)
 
 - `Win32Host::open()` registers a wide-character class with `RegisterClassW`,
   creates a window with `CreateWindowExW`, and `run()` pumps `GetMessageW` /
   `TranslateMessage` / `DispatchMessageW`. `present()` converts RGBA8 to the
   BGRA byte order of a top-down 32-bit `BI_RGB` DIB; `WM_PAINT` calls
   `StretchDIBits`. `WM_DESTROY` calls `PostQuitMessage`. Key, tap and resize
-  messages become `InputEvent`s. The R8 shortcut is one window per process.
+  messages become `InputEvent`s. The shortcut is one window per process.
 - `X11Host::open()` dynamically resolves and calls `XOpenDisplay`,
   `XCreateSimpleWindow`, `XMapWindow`, `XSelectInput` and `XFlush`;
   `present()` packs RGBA8 through the TrueColor visual masks into an
@@ -340,17 +335,18 @@ three times before the headless fallback takes over.
   TrueColor visual is also required at runtime.
 - Neither adapter was executed here. There is no Windows host or mingw linker
   on this macOS machine, and there is no X server for a Linux window. The two
-  target-scoped compile checks are the R8 evidence.
-- `--post-a11y [tree.json]` parses the renderer's deterministic R3 a11y JSON,
+  target-scoped compile checks are the evidence.
+- `--post-a11y [tree.json]` parses the renderer's deterministic accessibility tree JSON,
   maps visible nodes to AX roles, labels and bottom-left frames, then posts
   `NSAccessibilityElement`s with `NSAccessibilityPostNotification`. It checks
   `AXIsProcessTrusted()` and `AXUIElementCreateApplication()` first. Denied
   trust reports `SKIP AXIsProcessTrusted returned false: ...`; other OS/API
   failures report `FAIL`, never a fake `PASS`. `OPR_SKIP_A11Y=1` forces a
   deterministic SKIP without any Accessibility API call.
-- R3 JSON has no parent ids, so R8 posts a flat AX group in pre-order. There is
-  no claim of a nested AX hierarchy, VoiceOver speech verification or native
-  widget embedding. The pure parser/mapping tests need no OS permission.
+- The tree JSON has no parent ids, so the poster builds a flat AX group in
+  pre-order. There is no claim of a nested AX hierarchy, VoiceOver speech
+  verification or native widget embedding. The pure parser/mapping tests need
+  no OS permission.
 
 ## Standard new-platform checklist
 
@@ -380,19 +376,19 @@ headless `frame_to_png` path and prints nothing on success. The cross-layer
 harness can verify the PNG signature and IHDR without starting a GUI session.
 A missing path exits 2; a PNG/AppKit error exits 1 with the error on stderr.
 
-`--verify-window` runs the R7 live-window pixel verification described above.
+`--verify-window` runs the live-window pixel verification described above.
 It accepts `--ir <path>`, `--width <n>`, `--height <n>` and `--out <path>`,
 prints one `PASS`, `FAIL` or `SKIP` line and exits 0 for PASS and SKIP, 1 for
 FAIL.
 
-`--verify-gpu-presentation` runs the R10 real Metal drawable presentation and
+`--verify-gpu-presentation` runs the real Metal drawable presentation and
 on-screen comparison described above. It accepts the same `--ir`, `--width`,
 `--height` and `--out` options, prints one line containing
 `PASS ... mismatched_pixels=...` or `SKIP <reason>` and exits 0 for PASS and
 SKIP, 1 for FAIL. `OPR_SKIP_WINDOW=1` forces a SKIP; `OPUROM_GPU_DYLIB`
 overrides the runtime-loaded dylib path.
 
-`--post-a11y [tree.json]` posts the R3 accessibility tree on macOS; without a
+`--post-a11y [tree.json]` posts the accessibility tree on macOS; without a
 path it uses the checked-in renderer-tree fixture. It prints
 `PASS a11y_nodes=N` only after real AppKit/AX calls, or `SKIP <concrete reason>`
 when Accessibility trust is denied or `OPR_SKIP_A11Y=1` is set. A parse or API
@@ -414,26 +410,26 @@ cargo fmt --all -- --check
 RUSTFLAGS="-D warnings" cargo build --offline
 RUSTFLAGS="-D warnings" cargo test --offline
 cargo run --quiet --offline -- --hosts
-cargo run --quiet --offline -- --png /tmp/opurom-r5.png
+cargo run --quiet --offline -- --png /tmp/opurom-platform.png
 cargo run --quiet --offline -- --verify-window --out /tmp/opurom-window.png
-cargo run --quiet --offline -- --verify-gpu-presentation --out /tmp/opurom-r10-gpu.png
+cargo run --quiet --offline -- --verify-gpu-presentation --out /tmp/opurom-gpu-presentation.png
 cargo run --quiet --offline -- --post-a11y
 RUSTFLAGS="-D warnings" cargo check --offline --all-targets --target x86_64-pc-windows-gnu
 RUSTFLAGS="-D warnings" cargo check --offline --all-targets --target x86_64-unknown-linux-gnu
 ```
 
 From the umbrella root the built CLI can be invoked directly as
-`./opurom-platform/target/debug/opurom-platform --verify-gpu-presentation --out /tmp/opurom-r10-gpu.png`;
+`./opurom-platform/target/debug/opurom-platform --verify-gpu-presentation --out /tmp/opurom-gpu-presentation.png`;
 the renderer, IR and GPU dylib paths are absolute and CWD-independent.
 
-All pre-existing R7/R8 tests stay green. `cargo test --offline` runs **60
-tests** on macOS: R8's documented 49, two pure X11 pixel unit tests that also
-run on macOS, five R10 status/loader unit tests and four R10 integration tests
+`cargo test --offline` runs **60 tests** on macOS: 49 in the conformance and
+host suites, two pure X11 pixel unit tests that also
+run on macOS, five status/loader unit tests and four GPU presentation integration tests
 (presentation-on-screen, forced SKIP, missing-dylib SKIP and status honesty).
 Win32 adds two and X11 adds three pure unit tests that are compiled, not
 executed, by their target's `--all-targets` check. The Linux source has no
 `#[link(name = "X11")]` attribute and therefore no `-lX11` link requirement;
-Xlib is loaded only by `X11Host::open()`. The R10 bridge likewise has no
+Xlib is loaded only by `X11Host::open()`. The GPU presentation bridge likewise has no
 `#[link(name = "Metal", kind = "framework")]` in this crate; Metal lives in
 the runtime-loaded GPU dylib. `cargo fmt --all`, `cargo build --offline` and
 `cargo test --offline` produce zero warnings on macOS with

@@ -1,4 +1,4 @@
-//! R8: the a11y CLI reports an honest PASS/SKIP without faking permission.
+//! The a11y CLI reports an honest PASS/SKIP without faking permission.
 
 use std::path::PathBuf;
 use std::process::Command;

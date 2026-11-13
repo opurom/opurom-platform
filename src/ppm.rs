@@ -1,4 +1,4 @@
-//! Minimal P6 (binary RGB) PPM reader for the R7 pixel-verification oracle.
+//! Minimal P6 (binary RGB) PPM reader for the pixel-verification oracle.
 //!
 //! `opurom-render` writes `P6\n<width> <height>\n255\n` followed by
 //! `width * height * 3` RGB bytes. Only that exact shape is accepted; a

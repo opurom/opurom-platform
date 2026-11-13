@@ -1,5 +1,5 @@
-//! The R7 on-screen verification: open a real window, capture its pixels and
-//! compare them against the software renderer's PPM for the same frame.
+//! The on-screen verification: open a real window, capture its pixels and compare
+//! them against the software renderer's PPM for the same frame.
 //!
 //! The result is a value, never a fake PASS: a host without an Aqua session
 //! reports `Skipped` with the concrete reason, and a pixel mismatch reports
@@ -115,7 +115,7 @@ pub fn render_reference_ppm(
     Ok(())
 }
 
-/// Render the reference PPM and the exact R9 display list for the same frame.
+/// Render the reference PPM and the exact display list for the same frame.
 pub fn render_reference_with_commands(
     renderer: &Path,
     ir: &Path,

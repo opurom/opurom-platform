@@ -1,4 +1,4 @@
-//! Headless RGBA8-to-PNG conversion for the R5 macOS host.
+//! Headless RGBA8-to-PNG conversion for the macOS AppKit host.
 //!
 //! On macOS the bytes are wrapped in a real `CGImage` before the cached `png`
 //! crate encodes them. This path needs CoreGraphics but no GUI session or

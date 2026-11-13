@@ -293,7 +293,7 @@ fn capabilities_are_sane() {
     }
 }
 
-// ---- R3: terminal host adapter (R3_ADDENDUM.md section 6) ----
+// ---- terminal host adapter (COMPONENTS_AND_A11Y.md section 6) ----
 
 #[test]
 fn terminal_name_capabilities_and_viewport() {

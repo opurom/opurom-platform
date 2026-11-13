@@ -14,7 +14,7 @@ fn size(width: u32, height: u32) -> Size {
 
 fn temp_path(label: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
-        "opurom-platform-r5-{}-{label}.png",
+        "opurom-platform-appkit-{}-{label}.png",
         std::process::id()
     ))
 }

@@ -1,10 +1,10 @@
-//! X11 window host (R8_ADDENDUM.md section 3).
+//! X11 window host (BROWSER_AND_NATIVE_SURFACES.md section 3).
 //!
 //! Xlib is loaded at runtime with `dlopen`/`dlsym` instead of a link-time
 //! `-lX11` dependency, so a Linux CI runner needs neither X11 headers nor X11
 //! development libraries to build this crate. A missing `libX11.so.6` or a
 //! missing symbol is a documented `AdapterError`, never a fake window. This
-//! host is only compile-checked here: the R8 macOS host has no X server. A
+//! host is only compile-checked here: this macOS host has no X server. A
 //! 24/32-bit TrueColor visual is required; RGBA8 is packed through the
 //! visual's masks into an `XImage` and presented with `XPutImage`.
 

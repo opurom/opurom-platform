@@ -1,9 +1,8 @@
-//! R10 runtime bridge from the live AppKit layer to the GPU crate's Metal
-//! presentation cdylib.
+//! Runtime bridge from the live AppKit layer to the GPU crate's Metal presentation cdylib.
 //!
 //! The platform binary never links Metal or the GPU crate. It resolves the
-//! `opr_present_display_list` symbol with `dlopen`/`dlsym`, exactly as the R8
-//! X11 adapter resolves Xlib, and maps every failure to an honest verdict.
+//! `opr_present_display_list` symbol with `dlopen`/`dlsym`, exactly as the X11 adapter
+//! resolves Xlib, and maps every failure to an honest verdict.
 
 use std::env;
 use std::ffi::c_void;

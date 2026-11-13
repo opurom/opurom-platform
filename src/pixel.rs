@@ -1,4 +1,4 @@
-//! Tolerant pixel comparison for the R7 on-screen verification.
+//! Tolerant pixel comparison for the on-screen window verification.
 //!
 //! The window capture and the software renderer never agree bit-for-bit: the
 //! capture goes through the display colour profile, the compositor may blend

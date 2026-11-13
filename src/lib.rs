@@ -1,13 +1,13 @@
 //! OPUROM platform adapter ABI v0.1 (normative: `opurom-spec/ADAPTER_CONTRACT.md`).
 //!
-//! `Headless` is the v0.1 reference adapter and conformance oracle; R3 adds
-//! `Terminal`. R5 adds the macOS-only `MacHost` with a real AppKit/CAMetalLayer
-//! host descriptor, a headlessly verifiable PNG path and `WindowSet`. R8 adds
-//! compile-verified Win32/X11 window hosts and macOS accessibility posting.
-//! R10 adds a runtime-loaded Metal drawable presentation path for the live
+//! `Headless` is the v0.1 reference adapter and conformance oracle; the terminal host adds
+//! `Terminal`. The macOS host adds the `MacHost` with a real AppKit/CAMetalLayer
+//! host descriptor, a headlessly verifiable PNG path and `WindowSet`. The native surfaces
+//! add compile-verified Win32/X11 window hosts and macOS accessibility posting.
+//! The GPU presentation path adds a runtime-loaded Metal drawable presentation for the live
 //! AppKit window. The AppKit/CoreGraphics dependencies are target-scoped, so
 //! Linux CI builds the ABI and the cross-platform hosts without AppKit. Native
-//! widget trees, Wayland and HarmonyOS remain R11+.
+//! widget trees, Wayland and HarmonyOS are planned for later releases.
 
 use std::fmt;
 
@@ -165,8 +165,8 @@ pub struct PlatformSpec {
 }
 
 /// The headless reference adapter: a Verified host (v0.1). It is a host/adapter, not
-/// a target emitter, so it is not one of the 14 target rows. R3 adds `TERMINAL_SPEC`
-/// as a second Verified host.
+/// a target emitter, so it is not one of the 14 target rows. The terminal host adds
+/// `TERMINAL_SPEC` as a second Verified host.
 pub const HEADLESS_SPEC: PlatformSpec = PlatformSpec {
     name: "headless",
     emitter: "headless",
@@ -180,8 +180,8 @@ pub const HEADLESS_SPEC: PlatformSpec = PlatformSpec {
     status: Status::Verified,
 };
 
-/// R3 Verified host adapter: terminal truecolor ANSI presentation (R3_ADDENDUM.md
-/// section 6). A thin host adapter demonstrating the platform boundary, not a GPU
+/// The terminal Verified host adapter: truecolor ANSI presentation
+/// (COMPONENTS_AND_A11Y.md section 6). A thin host adapter demonstrating the platform boundary, not a GPU
 /// backend. Like `headless` it is a host, not one of the 14 target emitter rows, so
 /// it is exposed via `host_platforms()` / `spec_by_name()` / the CLI `--hosts` flag.
 pub const TERMINAL_SPEC: PlatformSpec = PlatformSpec {
@@ -213,9 +213,9 @@ pub const REFERENCE_PPM_ENV: &str = "OPR_REFERENCE_PPM";
 /// reference PPM.
 pub const RENDERER_BIN_ENV: &str = "OPUROM_RENDER_BIN";
 
-/// R5 Verified host on macOS. `native_embed` marks the real `NSView` /
+/// The Verified host on macOS. `native_embed` marks the real `NSView` /
 /// `CAMetalLayer` native host surface, not an embedded widget tree; `gpu` stays
-/// false because `PlatformAdapter::present` writes a PNG. The separate R10
+/// false because `PlatformAdapter::present` writes a PNG. The separate
 /// `--verify-gpu-presentation` CLI uses a real Metal drawable; it does not
 /// change the adapter ABI or this frozen capability row.
 /// `dpi_scale` is a documented 1.0 fallback; `appkit_capabilities()` replaces it
@@ -341,8 +341,8 @@ pub fn registry() -> Vec<PlatformSpec> {
 }
 
 /// The frozen v0.1 listing: the headless oracle plus the 14 targets (15, one
-/// `Verified`). Kept in its R2 shape as a stable regression oracle; R3 Verified
-/// hosts are listed by `host_platforms()` and covered by `spec_by_name()`.
+/// `Verified`). Kept in its original shape as a stable regression oracle; the terminal
+/// and AppKit Verified hosts are listed by `host_platforms()` and covered by `spec_by_name()`.
 pub fn all_platforms() -> Vec<PlatformSpec> {
     let mut all = Vec::with_capacity(TARGET_SPECS.len() + 1);
     all.push(HEADLESS_SPEC.clone());
@@ -359,7 +359,7 @@ pub fn appkit_capabilities() -> Capabilities {
     capabilities
 }
 
-/// The R5 AppKit host row with its measured/fallback DPI scale.
+/// The AppKit host row with its measured/fallback DPI scale.
 #[cfg(target_os = "macos")]
 pub fn appkit_spec() -> PlatformSpec {
     let mut spec = APPKIT_SPEC.clone();
@@ -367,8 +367,8 @@ pub fn appkit_spec() -> PlatformSpec {
     spec
 }
 
-/// Fully implemented, `Verified` host adapters (not target emitters). R3 adds
-/// `terminal`; R5 adds `appkit` on macOS only. Listed by `--hosts`.
+/// Fully implemented, `Verified` host adapters (not target emitters). The terminal host
+/// is always listed; `appkit` is added on macOS only. Listed by `--hosts`.
 pub fn host_platforms() -> Vec<PlatformSpec> {
     #[allow(unused_mut)]
     let mut hosts = vec![HEADLESS_SPEC.clone(), TERMINAL_SPEC.clone()];
@@ -378,7 +378,7 @@ pub fn host_platforms() -> Vec<PlatformSpec> {
 }
 
 /// Query any known platform by name: the 14 targets, the headless oracle, the
-/// R3 terminal host and (on macOS) the R5 AppKit host.
+/// the terminal host and (on macOS) the AppKit host.
 pub fn spec_by_name(name: &str) -> Option<PlatformSpec> {
     let mut known = all_platforms();
     known.push(TERMINAL_SPEC.clone());
