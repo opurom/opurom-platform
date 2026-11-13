@@ -278,6 +278,60 @@ Vulkan/ANGLE/D3D, no GPU text shaping and no measured fps claim.
 `cacheDisplay` sees the exact presented IOSurface, not a CPU re-render of the
 software frame.
 
+### Animated multi-frame GPU loop
+
+`--verify-gpu-animation-loop` is a **separate** CLI flag. The single-frame
+`--verify-gpu-presentation` output above is unchanged.
+
+1. The software renderer emits the reference PPM and the exact display-list
+   JSON at each of four distinct deterministic animation ticks
+   (`0, 96, 192, 4000` ms) from
+   `../opurom-render/tests/fixtures/animation-loop.opuir.json`, which uses the
+   `ease` and `spring` entry-animation curves. `--ir` overrides the IR.
+2. For each tick, `src/gpu_animation.rs` calls the GPU dylib's
+   `opr_present_display_list_timed` C ABI. The Metal compute raster and the
+   drawable blit/present are measured with `std::time::Instant` and reported as
+   `dispatch_ms` and `present_ms` in that frame's line. Every frame rebinds
+   the layer contents to the IOSurface of the drawable that was just
+   presented, so Core Animation's offscreen `cacheDisplay` cannot keep showing
+   the first frame's recycled surface.
+3. The live window is captured **after each present** into one PNG per frame,
+   and the content region is compared with the software renderer's frame at
+   that same tick using `CHANNEL_TOLERANCE = 32` and
+   `MISMATCH_BUDGET_PERCENT = 2.0`.
+4. PASS additionally requires every captured frame to differ from the
+   neighbouring captured frame and from the software references of the other
+   ticks by more than the mismatch budget. Those two measured minima are
+   `min_interframe_delta` and `min_cross_tick_delta`. A frozen layer surface
+   therefore fails the check rather than producing a false PASS.
+
+Run it from the umbrella root (or from this crate):
+
+```sh
+./opurom-platform/target/debug/opurom-platform \
+  --verify-gpu-animation-loop --out /tmp/opurom-gpu-animation-loop.png
+```
+
+Measured on the reference host (macOS arm64, Apple M6, 200x150 content):
+four frames, **120 000 compared pixels, 0 mismatching pixels**, max channel
+delta 23, `min_interframe_delta=4548`, `min_cross_tick_delta=4548`, **PASS**.
+Per-frame dispatch and present times are printed on each `frame=` line; they
+vary per run and are reproduced verbatim in the verification report. The
+per-frame numbers are commit-to-completion wall times, not GPU timestamps.
+
+`SKIP <concrete reason>` exits 0 when there is no Aqua session, no main screen,
+not the main thread, no software renderer, no animated IR, no GPU dylib, no
+Metal device, no drawable, or no IOSurface-backed presented texture.
+`OPR_SKIP_WINDOW=1` forces the documented SKIP; `OPUROM_GPU_DYLIB`,
+`OPUROM_RENDER_BIN`, `--ir`, `--width`, `--height` and `--out` remain
+available. Metal/API errors, a mismatched sequence or a stale surface print
+`FAIL` with the measured numbers and exit 1. A headless Linux runner prints
+`SKIP GPU animation loop is macOS/Metal only`. Never a fake PASS.
+
+This is a bounded deterministic sequence of four presented frames on one
+window, not a real-time render loop. There is no fps claim, no smoothness or
+vsync claim, no device conformance matrix and no Vulkan/ANGLE/D3D backend.
+
 ### Pure RGBA8 to PNG path
 
 `frame_to_png(FrameView, path)` works headlessly on macOS:
@@ -388,6 +442,12 @@ on-screen comparison described above. It accepts the same `--ir`, `--width`,
 SKIP, 1 for FAIL. `OPR_SKIP_WINDOW=1` forces a SKIP; `OPUROM_GPU_DYLIB`
 overrides the runtime-loaded dylib path.
 
+`--verify-gpu-animation-loop` runs the bounded four-frame animated GPU loop
+described above. It accepts the same options (defaulting to the animated IR
+fixture), prints one measured `frame=` line per tick plus a final `PASS`,
+`FAIL` or `SKIP` line, and exits 0 for PASS and SKIP, 1 for FAIL. Timings are
+`dispatch_ms` and `present_ms` per frame; no fps claim is made.
+
 `--post-a11y [tree.json]` posts the accessibility tree on macOS; without a
 path it uses the checked-in renderer-tree fixture. It prints
 `PASS a11y_nodes=N` only after real AppKit/AX calls, or `SKIP <concrete reason>`
@@ -413,6 +473,7 @@ cargo run --quiet --offline -- --hosts
 cargo run --quiet --offline -- --png /tmp/opurom-platform.png
 cargo run --quiet --offline -- --verify-window --out /tmp/opurom-window.png
 cargo run --quiet --offline -- --verify-gpu-presentation --out /tmp/opurom-gpu-presentation.png
+cargo run --quiet --offline -- --verify-gpu-animation-loop --out /tmp/opurom-gpu-animation-loop.png
 cargo run --quiet --offline -- --post-a11y
 RUSTFLAGS="-D warnings" cargo check --offline --all-targets --target x86_64-pc-windows-gnu
 RUSTFLAGS="-D warnings" cargo check --offline --all-targets --target x86_64-unknown-linux-gnu
@@ -422,10 +483,12 @@ From the umbrella root the built CLI can be invoked directly as
 `./opurom-platform/target/debug/opurom-platform --verify-gpu-presentation --out /tmp/opurom-gpu-presentation.png`;
 the renderer, IR and GPU dylib paths are absolute and CWD-independent.
 
-`cargo test --offline` runs **60 tests** on macOS: 49 in the conformance and
-host suites, two pure X11 pixel unit tests that also
-run on macOS, five status/loader unit tests and four GPU presentation integration tests
-(presentation-on-screen, forced SKIP, missing-dylib SKIP and status honesty).
+`cargo test --offline` runs **71 tests** on macOS: 25 library unit tests
+(including four pure animation-loop checks), two accessibility tests, eleven
+AppKit host tests, two CLI tests, sixteen conformance tests, seven
+animation-loop integration tests, four GPU presentation integration tests
+(presentation-on-screen, forced SKIP, missing-dylib SKIP and status honesty)
+and four native-window tests.
 Win32 adds two and X11 adds three pure unit tests that are compiled, not
 executed, by their target's `--all-targets` check. The Linux source has no
 `#[link(name = "X11")]` attribute and therefore no `-lX11` link requirement;

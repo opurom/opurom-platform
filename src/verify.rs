@@ -140,6 +140,36 @@ pub fn render_reference_with_commands(
     Ok(())
 }
 
+/// Render the reference PPM and the exact display list for one animation
+/// clock position. The renderer's `--tick` and `--commands` options share the
+/// same integer clock, so the two outputs always describe the same frame.
+pub fn render_animation_frame(
+    renderer: &Path,
+    ir: &Path,
+    width: u32,
+    height: u32,
+    tick_ms: i64,
+    out: &Path,
+    commands: &Path,
+) -> Result<(), AdapterError> {
+    let output = std::process::Command::new(renderer)
+        .arg(ir)
+        .args([width.to_string(), height.to_string()])
+        .arg(out)
+        .arg("--tick")
+        .arg(tick_ms.to_string())
+        .arg("--commands")
+        .arg(commands)
+        .output()
+        .map_err(|_| AdapterError::Backend("the software renderer could not be started"))?;
+    if !output.status.success() {
+        return Err(AdapterError::Backend(
+            "the software renderer failed to render the animation frame and display list",
+        ));
+    }
+    Ok(())
+}
+
 /// Compare a captured window against a software-renderer PPM.
 ///
 /// Both images must have the same size; a different size is a FAIL, not a

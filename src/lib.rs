@@ -12,6 +12,7 @@
 use std::fmt;
 
 mod a11y;
+pub mod gpu_animation;
 pub mod gpu_presentation;
 mod headless;
 mod pixel;
@@ -38,10 +39,11 @@ pub use a11y::{
     map_a11y_tree, parse_a11y_json, post_a11y_tree, A11yNode, A11yPost, AxElement, AxRole,
     DEFAULT_A11Y_TREE, SKIP_A11Y_ENV,
 };
+pub use gpu_animation::{verify_gpu_animation_loop, ANIMATION_FLAG, ANIMATION_TICKS};
 pub use gpu_presentation::{
-    classify, gpu_library_path, present_display_list, workspace_root, PresentationOutcome,
-    GPU_DYLIB_ENV, PRESENT_ERROR, PRESENT_INVALID_ARGUMENT, PRESENT_METAL_UNAVAILABLE,
-    PRESENT_NO_DRAWABLE, PRESENT_OK, PRESENT_UNSUPPORTED,
+    classify, gpu_library_path, present_animation_frame, present_display_list, workspace_root,
+    FrameTimings, PresentationOutcome, GPU_DYLIB_ENV, PRESENT_ERROR, PRESENT_INVALID_ARGUMENT,
+    PRESENT_METAL_UNAVAILABLE, PRESENT_NO_DRAWABLE, PRESENT_OK, PRESENT_UNSUPPORTED,
 };
 pub use headless::Headless;
 pub use pixel::{compare_rgba_to_ppm, PixelComparison, CHANNEL_TOLERANCE, MISMATCH_BUDGET_PERCENT};
@@ -49,8 +51,8 @@ pub use png::frame_to_png;
 pub use ppm::{read_ppm, PpmImage};
 pub use terminal::Terminal;
 pub use verify::{
-    compare_capture, render_reference_ppm, render_reference_with_commands, software_renderer_path,
-    Verification,
+    compare_capture, render_animation_frame, render_reference_ppm, render_reference_with_commands,
+    software_renderer_path, Verification,
 };
 pub use window_set::WindowSet;
 

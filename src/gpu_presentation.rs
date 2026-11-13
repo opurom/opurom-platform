@@ -48,6 +48,17 @@ pub enum PresentationOutcome {
     Failed(String),
 }
 
+/// Wall-clock timings of one presented frame, measured with `Instant` inside
+/// the GPU library. `repr(C)` matches `opurom-gpu`'s C ABI struct exactly.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FrameTimings {
+    /// Metal compute dispatch for this frame, in nanoseconds.
+    pub dispatch_ns: u64,
+    /// Drawable blit, present, commit, completion and layer refresh, in nanoseconds.
+    pub present_ns: u64,
+}
+
 /// Classify a GPU status with its concrete reason.
 pub fn classify(status: i32, reason: &str) -> PresentationOutcome {
     if status == PRESENT_OK {
@@ -88,6 +99,14 @@ extern "C" {
 
 #[cfg(target_os = "macos")]
 type PresentFn = unsafe extern "C" fn(*const c_char, *mut c_void, *mut c_char, usize) -> c_int;
+#[cfg(target_os = "macos")]
+type PresentTimedFn = unsafe extern "C" fn(
+    *const c_char,
+    *mut c_void,
+    *mut c_char,
+    usize,
+    *mut FrameTimings,
+) -> c_int;
 
 #[cfg(target_os = "macos")]
 struct GpuLibrary {
@@ -126,6 +145,26 @@ impl GpuLibrary {
             );
         }
         Ok(unsafe { mem::transmute::<*mut c_void, PresentFn>(symbol) })
+    }
+
+    fn present_timed_symbol(&self) -> Result<PresentTimedFn, String> {
+        // SAFETY: `handle` came from a successful dlopen and the symbol name
+        // is NUL-terminated. A non-null symbol has the declared C signature.
+        let symbol = unsafe {
+            dlsym(
+                self.handle,
+                b"opr_present_display_list_timed\0"
+                    .as_ptr()
+                    .cast::<c_char>(),
+            )
+        };
+        if symbol.is_null() {
+            return Err(
+                "dlsym(opr_present_display_list_timed) failed; the GPU dylib has no timed animation-loop entry point"
+                    .to_owned(),
+            );
+        }
+        Ok(unsafe { mem::transmute::<*mut c_void, PresentTimedFn>(symbol) })
     }
 }
 
@@ -193,44 +232,107 @@ fn ensure_gpu_library() -> Result<PathBuf, String> {
 /// Present one display list through the live layer using the runtime library.
 #[cfg(target_os = "macos")]
 pub fn present_display_list(json: &str, layer: *mut c_void) -> PresentationOutcome {
+    present_impl(json, layer, None).0
+}
+
+/// Present one frame of the animation loop and return its `Instant`-measured
+/// GPU dispatch and present times. Zero timings with any non-PASS outcome are
+/// never reported as measurements.
+#[cfg(target_os = "macos")]
+pub fn present_animation_frame(
+    json: &str,
+    layer: *mut c_void,
+) -> (PresentationOutcome, FrameTimings) {
+    present_impl(json, layer, Some(FrameTimings::default()))
+}
+
+#[cfg(target_os = "macos")]
+fn present_impl(
+    json: &str,
+    layer: *mut c_void,
+    timed: Option<FrameTimings>,
+) -> (PresentationOutcome, FrameTimings) {
+    let mut timings = timed.unwrap_or_default();
+    let skip = |reason: String| {
+        (
+            PresentationOutcome::Skipped(reason),
+            FrameTimings::default(),
+        )
+    };
+    let fail = |reason: String| (PresentationOutcome::Failed(reason), FrameTimings::default());
+
     let path = match ensure_gpu_library() {
         Ok(path) => path,
-        Err(reason) => return PresentationOutcome::Skipped(reason),
+        Err(reason) => return skip(reason),
     };
     let library = match GpuLibrary::load(&path) {
         Ok(library) => library,
-        Err(reason) => return PresentationOutcome::Skipped(reason),
-    };
-    let present = match library.present_symbol() {
-        Ok(present) => present,
-        Err(reason) => return PresentationOutcome::Skipped(reason),
+        Err(reason) => return skip(reason),
     };
     if layer.is_null() {
-        return PresentationOutcome::Failed("the live window has no CAMetalLayer".to_owned());
+        return fail("the live window has no CAMetalLayer".to_owned());
     }
     let json = match CString::new(json) {
         Ok(json) => json,
         Err(_) => {
-            return PresentationOutcome::Failed(
-                "the generated display list contains a NUL byte".to_owned(),
-            )
+            return fail("the generated display list contains a NUL byte".to_owned());
         }
     };
     let mut reason = [0 as c_char; 512];
     // SAFETY: the layer is retained by the caller, `json` is NUL-terminated,
     // and `reason` owns 512 writable bytes. The symbol was loaded from the
-    // matching GPU cdylib.
-    let status = unsafe { present(json.as_ptr(), layer, reason.as_mut_ptr(), reason.len()) };
+    // matching GPU cdylib; `timings` is a writable repr(C) struct.
+    let status = match timed {
+        Some(_) => {
+            let present = match library.present_timed_symbol() {
+                Ok(present) => present,
+                Err(reason) => return skip(reason),
+            };
+            unsafe {
+                present(
+                    json.as_ptr(),
+                    layer,
+                    reason.as_mut_ptr(),
+                    reason.len(),
+                    &mut timings,
+                )
+            }
+        }
+        None => {
+            let present = match library.present_symbol() {
+                Ok(present) => present,
+                Err(reason) => return skip(reason),
+            };
+            unsafe { present(json.as_ptr(), layer, reason.as_mut_ptr(), reason.len()) }
+        }
+    };
     let reason = unsafe { CStr::from_ptr(reason.as_ptr()) }
         .to_string_lossy()
         .into_owned();
-    classify(status as i32, &reason)
+    let outcome = classify(status as i32, &reason);
+    if matches!(outcome, PresentationOutcome::Presented) {
+        (outcome, timings)
+    } else {
+        (outcome, FrameTimings::default())
+    }
 }
 
 /// Non-macOS hosts cannot present a Metal drawable and report a concrete SKIP.
 #[cfg(not(target_os = "macos"))]
 pub fn present_display_list(_json: &str, _layer: *mut c_void) -> PresentationOutcome {
     PresentationOutcome::Skipped("GPU presentation is macOS/Metal only".to_owned())
+}
+
+/// Non-macOS hosts cannot measure a Metal frame and report a concrete SKIP.
+#[cfg(not(target_os = "macos"))]
+pub fn present_animation_frame(
+    _json: &str,
+    _layer: *mut c_void,
+) -> (PresentationOutcome, FrameTimings) {
+    (
+        PresentationOutcome::Skipped("GPU animation loop is macOS/Metal only".to_owned()),
+        FrameTimings::default(),
+    )
 }
 
 #[cfg(test)]

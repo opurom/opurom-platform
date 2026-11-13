@@ -1,6 +1,6 @@
 use opurom_platform::{
     frame_to_png, host_platforms, parse_a11y_json, post_a11y_tree, registry, FrameView,
-    DEFAULT_A11Y_TREE, SKIP_WINDOW_ENV,
+    ANIMATION_FLAG, DEFAULT_A11Y_TREE, SKIP_WINDOW_ENV,
 };
 #[cfg(target_os = "macos")]
 use opurom_platform::{
@@ -501,6 +501,9 @@ fn main() {
         };
         write_test_png(path);
         return;
+    }
+    if args.iter().any(|arg| arg == ANIMATION_FLAG) {
+        std::process::exit(opurom_platform::verify_gpu_animation_loop(&args));
     }
     if args.iter().any(|arg| arg == "--verify-gpu-presentation") {
         std::process::exit(verify_gpu_presentation(&args));
