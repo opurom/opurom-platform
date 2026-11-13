@@ -1,7 +1,8 @@
 use opurom_platform::{
-    all_platforms, host_platforms, known_platforms, platforms_with, registry, spec_by_name,
-    AdapterError, Capabilities, Capability, FrameView, Headless, InputEvent, Lifecycle,
-    PlatformAdapter, Size, Status, Terminal, WindowSet, HEADLESS_SPEC, TERMINAL_SPEC,
+    all_platforms, focus_order, host_platforms, known_platforms, parse_a11y_json, platforms_with,
+    registry, spec_by_name, AdapterError, Capabilities, Capability, FocusOrder, FrameView,
+    Headless, InputEvent, Lifecycle, PlatformAdapter, Size, Status, Terminal, WindowSet,
+    DEFAULT_A11Y_TREE, HEADLESS_SPEC, TERMINAL_SPEC,
 };
 
 /// The 14 target names required by ADAPTER_CONTRACT.md.
@@ -682,4 +683,19 @@ fn capability_supports_reads_each_boolean_flag() {
     assert!(spec.supports(Capability::Gpu));
     assert!(spec.supports(Capability::NativeEmbed));
     assert!(!spec.supports(Capability::Lifecycle));
+}
+
+// ---- the headless oracle verifies deterministic focus order ----
+
+#[test]
+fn oracle_focus_order_follows_document_order_with_non_empty_bounds() {
+    // The shipped tree: the visible interactive controls (button 3, checkbox 5,
+    // slider 6, checkbox 7, button 8) keep document order; hidden nodes and
+    // plain text/image/heading roles are never focusable, and non-empty bounds
+    // for every focusable node are asserted en passant by the oracle.
+    let nodes = parse_a11y_json(DEFAULT_A11Y_TREE).unwrap();
+    match focus_order(&nodes) {
+        FocusOrder::Passed { order } => assert_eq!(order, vec![3, 5, 6, 7, 8]),
+        FocusOrder::Failed { reason } => panic!("the shipped a11y tree must traverse: {reason}"),
+    }
 }
