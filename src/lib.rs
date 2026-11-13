@@ -305,7 +305,10 @@ pub const WAYLAND_SPEC: PlatformSpec = PlatformSpec {
 };
 
 // `Scaffold` = a known emitter with a registry row, no runtime adapter yet.
-// `Planned` = no dedicated target emitter yet. Neither is implemented.
+// `Planned` = no dedicated target emitter yet. Neither category is `Verified`.
+// The three desktop rows carry a compiled-in host adapter (`MacHost`,
+// `Win32Host`, `X11Host`) that renders and presents a real frame, so they are
+// `Verified`; the mobile/handheld rows have no adapter and stay `Planned`.
 const TARGET_SPECS: [PlatformSpec; 14] = [
     PlatformSpec {
         name: "android",
@@ -335,19 +338,19 @@ const TARGET_SPECS: [PlatformSpec; 14] = [
         name: "windows",
         emitter: "native",
         capabilities: caps(true, false, 1.0),
-        status: Status::Planned,
+        status: Status::Verified,
     },
     PlatformSpec {
         name: "macos",
         emitter: "native",
         capabilities: caps(true, false, 1.0),
-        status: Status::Planned,
+        status: Status::Verified,
     },
     PlatformSpec {
         name: "linux",
         emitter: "native",
         capabilities: caps(true, false, 1.0),
-        status: Status::Planned,
+        status: Status::Verified,
     },
     PlatformSpec {
         name: "wechat",
@@ -394,14 +397,16 @@ const TARGET_SPECS: [PlatformSpec; 14] = [
 ];
 
 /// The 14 target platforms named by ADAPTER_CONTRACT.md, one unique row each.
-/// None is `Verified` in v0.1.
+/// The three desktop rows with a compiled-in host adapter are `Verified`; the
+/// mobile/handheld rows and the mini-program/web rows are not.
 pub fn registry() -> Vec<PlatformSpec> {
     TARGET_SPECS.to_vec()
 }
 
-/// The frozen v0.1 listing: the headless oracle plus the 14 targets (15, one
-/// `Verified`). Kept in its original shape as a stable regression oracle; the terminal
-/// and AppKit Verified hosts are listed by `host_platforms()` and covered by `spec_by_name()`.
+/// The v0.1 listing: the headless oracle plus the 14 targets (15). Kept in its
+/// original shape as a stable regression oracle; the terminal and AppKit
+/// `Verified` hosts are listed by `host_platforms()` and covered by
+/// `spec_by_name()`.
 pub fn all_platforms() -> Vec<PlatformSpec> {
     let mut all = Vec::with_capacity(TARGET_SPECS.len() + 1);
     all.push(HEADLESS_SPEC.clone());

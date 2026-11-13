@@ -26,9 +26,9 @@ drawable and verifies the on-screen pixels.
 | ios | native | Planned | false | false | false |
 | harmony-mobile | native | Planned | false | false | false |
 | harmony-pc | native | Planned | false | false | true |
-| windows | native | Planned | false | false | true |
-| macos | native | Planned | false | false | true |
-| linux | native | Planned | false | false | true |
+| windows | native | **Verified** | false | false | true |
+| macos | native | **Verified** | false | false | true |
+| linux | native | **Verified** | false | false | true |
 | wechat | wechat | Scaffold | false | false | false |
 | alipay | alipay | Scaffold | false | false | false |
 | qq | qq | Scaffold | false | false | false |
@@ -37,17 +37,18 @@ drawable and verifies the on-screen pixels.
 | kuaishou | kuaishou | Scaffold | false | false | false |
 | web | web | Scaffold | false | false | false |
 
-`registry()` still returns the **14 target rows** named by ADAPTER_CONTRACT.md,
-each unique and each `Scaffold` or `Planned`; the `macos` target row remains
-`Planned`. `all_platforms()` is still the frozen v0.1 listing (`headless` + the
-14 targets = 15, one `Verified`), so the regression oracle is unchanged. The
-`Verified` rows above are **host adapters**, not target emitters. The
-`Win32Host` and `X11Host` are compile-only host adapters behind their OS
-`cfg`s; they are deliberately absent from `host_platforms()` and the `windows`
-/ `linux` target rows stay `Planned` because no window was executed.
-`host_platforms()` / `--hosts` list `headless`, `terminal` and, on macOS only,
-`appkit`; other targets list only the two cross-platform hosts. `appkit` is
-also reachable through `spec_by_name("appkit")` on macOS.
+`registry()` returns the **14 target rows** named by ADAPTER_CONTRACT.md,
+each unique. The three desktop rows (`windows`, `macos`, `linux`) are
+`Verified` because each has a compiled-in host adapter (`Win32Host`, `MacHost`,
+`X11Host`) and the `native` target renders and writes a real frame; a test
+asserts that a `Verified` target row matches a host adapter that is actually
+compiled in. The mobile and handheld rows (`android`, `ios`, `harmony-mobile`,
+`harmony-pc`) have no adapter and stay `Planned`; the mini-program and `web`
+rows are `Scaffold`. `all_platforms()` is the v0.1 listing (`headless` + the 14
+targets = 15 rows). The `Verified` rows above are **host adapters**, not target
+emitters. `host_platforms()` / `--hosts` list `headless`, `terminal` and, on
+macOS only, `appkit`; other targets list only the two cross-platform hosts.
+`appkit` is also reachable through `spec_by_name("appkit")` on macOS.
 
 `known_platforms()` enumerates every platform the crate resolves by name: the
 frozen `all_platforms()` listing plus the `terminal` host, the `wayland` host
@@ -90,6 +91,32 @@ AppKit host below; the Linux CI runner has no window server and always reports
 SKIP. macOS a11y posting requires OS Accessibility permission. The GPU
 bridge also uses runtime `dlopen`/`dlsym` (no `-framework Metal` link in this
 binary), matching the X11 fix; all AppKit/Metal code is `cfg`-gated.
+
+## Native render target
+
+`opuromc target <ir.json> --target native -o <dir>` generates a standalone
+Cargo project (`Cargo.toml` plus `src/main.rs`). Its `[dependencies]` point at
+the sibling `opurom-render` and `opurom-platform` crates by path, so the
+generated app renders the UI through the same renderer as every other surface
+rather than embedding a second painter.
+
+At startup the app parses the embedded IR, builds a `StateView` from its
+initial state, and rasterizes one frame with `opurom_render::Renderer` into the
+default viewport of **800x600** logical pixels. `OPUROM_FRAME_WIDTH` and
+`OPUROM_FRAME_HEIGHT` override the two dimensions. The rendered RGBA8 frame is
+written as a PPM file (the first positional argument, defaulting to
+`opurom-native-frame.ppm` in the system temp directory so the state-machine
+entry point never writes into the caller's directory); on macOS it is
+additionally written as a PNG through
+`opurom_platform::frame_to_png`, and any other host reports the concrete
+`AppKitUnavailable` reason instead of claiming a PNG. After rendering, the app
+keeps reading the same stdin state-machine commands (`tap`, `input`, `state`,
+`quit`) and printing patches, so the state logic is unchanged.
+
+The desktop target rows (`windows`, `macos`, `linux`) in the Status table are
+`Verified` because each has a compiled-in host adapter and the native target
+renders a real frame. The mobile and handheld rows have no adapter and stay
+`Planned`.
 
 ## ABI summary
 

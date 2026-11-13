@@ -228,8 +228,18 @@ fn headless_rejects_wrong_frame_length() {
     assert_ne!(host.digest(), before);
 }
 
+/// Whether a host adapter for this desktop target is compiled into this build.
+fn adapter_compiled_for(name: &str) -> bool {
+    match name {
+        "macos" => cfg!(target_os = "macos"),
+        "windows" => cfg!(target_os = "windows"),
+        "linux" => cfg!(target_os = "linux"),
+        _ => false,
+    }
+}
+
 #[test]
-fn registry_has_14_unique_entries_and_one_verified() {
+fn registry_has_14_unique_entries() {
     let specs = registry();
     assert_eq!(specs.len(), 14);
 
@@ -245,22 +255,49 @@ fn registry_has_14_unique_entries_and_one_verified() {
             "{name} must appear exactly once"
         );
     }
-    assert!(
-        specs
-            .iter()
-            .all(|spec| matches!(spec.status, Status::Scaffold | Status::Planned)),
-        "no target row may claim Verified in v0.1"
-    );
+}
 
-    // The whole platform set has exactly one Verified platform: headless.
-    let all = all_platforms();
-    assert_eq!(all.len(), 15);
-    let verified: Vec<&str> = all
-        .iter()
-        .filter(|spec| spec.status == Status::Verified)
-        .map(|spec| spec.name)
-        .collect();
-    assert_eq!(verified, vec!["headless"]);
+#[test]
+fn registry_status_matches_the_presence_of_a_real_adapter() {
+    // The three desktop rows carry a compiled-in host adapter, so they are
+    // Verified. Every row that has no adapter must stay non-Verified.
+    for name in ["windows", "macos", "linux"] {
+        let spec = spec_by_name(name).unwrap();
+        assert_eq!(spec.status, Status::Verified, "{name} has a host adapter");
+        assert_eq!(spec.emitter, "native", "{name} is a native target row");
+    }
+    for name in ["android", "ios", "harmony-mobile", "harmony-pc"] {
+        assert_eq!(
+            spec_by_name(name).unwrap().status,
+            Status::Planned,
+            "{name} has no adapter and must stay Planned"
+        );
+    }
+    for name in [
+        "wechat", "alipay", "qq", "douyin", "baidu", "kuaishou", "web",
+    ] {
+        assert_eq!(
+            spec_by_name(name).unwrap().status,
+            Status::Scaffold,
+            "{name} is a known emitter with no runtime adapter"
+        );
+    }
+
+    // The platform this test runs on must advertise the adapter it actually
+    // compiled in, so a Verified row never claims a missing adapter.
+    #[cfg(target_os = "macos")]
+    assert!(
+        adapter_compiled_for("macos") && spec_by_name("macos").unwrap().status == Status::Verified
+    );
+    #[cfg(target_os = "windows")]
+    assert!(
+        adapter_compiled_for("windows")
+            && spec_by_name("windows").unwrap().status == Status::Verified
+    );
+    #[cfg(target_os = "linux")]
+    assert!(
+        adapter_compiled_for("linux") && spec_by_name("linux").unwrap().status == Status::Verified
+    );
 }
 
 #[test]
