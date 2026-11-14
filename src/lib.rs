@@ -117,6 +117,18 @@ pub struct Capabilities {
     pub dpi_scale: f32,
 }
 
+/// Deterministic metadata a host reports about its own window surface.
+///
+/// `title` is the host's logical window title: the host name for a host with no
+/// OS window (headless, terminal) and the platform's host name otherwise.
+/// `dpi_scale` is the logical DPI scale reported by the host's own capability
+/// row, so the same host always answers the same way.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WindowMetadata {
+    pub title: String,
+    pub dpi_scale: f32,
+}
+
 /// Adapter errors are values, never panics across the boundary. Three consecutive
 /// `Err`s from an adapter mean "degraded": the kernel swaps in `Headless`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,6 +158,18 @@ pub trait PlatformAdapter {
     fn viewport(&self) -> Size;
     fn poll_event(&mut self) -> Option<InputEvent>;
     fn present(&mut self, frame: FrameView<'_>) -> Result<(), AdapterError>;
+
+    /// Deterministic window metadata for this host.
+    ///
+    /// The default derives the title from [`PlatformAdapter::name`] and the
+    /// DPI scale from [`PlatformAdapter::capabilities`], so every window type
+    /// answers the query without an OS window or a platform-specific override.
+    fn metadata(&self) -> WindowMetadata {
+        WindowMetadata {
+            title: self.name().to_owned(),
+            dpi_scale: self.capabilities().dpi_scale,
+        }
+    }
 }
 
 /// Verified status of a platform. Never claim `Verified` for a scaffold.

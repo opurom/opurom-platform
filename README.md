@@ -95,7 +95,8 @@ binary), matching the X11 fix; all AppKit/Metal code is `cfg`-gated.
 
 | Item | Contract |
 | --- | --- |
-| `PlatformAdapter` | `name`, `capabilities`, `viewport`, `poll_event`, `present` - the only platform-specific trait; kernel/compiler/renderer never change for a new host |
+| `PlatformAdapter` | `name`, `capabilities`, `viewport`, `poll_event`, `present`, `metadata` - the only platform-specific trait; kernel/compiler/renderer never change for a new host |
+| `WindowMetadata` | deterministic window query: `title` and `dpi_scale`; the `metadata` default derives them from `name()` and `capabilities()` |
 | `FrameView<'a>` | borrowed RGBA8 view `{ width: u32, height: u32, pixels: &'a [u8] }`, defined here so the renderer is not a compile-time dependency of adapters |
 | `Size` | logical viewport `{ width: u32, height: u32 }` |
 | `InputEvent` | `Tap`, `Input`, `Key`, `Resize`, `Lifecycle`; logical pixels, top-left origin, `node_id: u32::MAX` when hit-testing is unavailable |
@@ -139,6 +140,25 @@ bytes. `push_key`, `push_input` and `push_event` queue normalized input;
 `Resize` event, and draining a queued `Resize` moves the viewport the same way,
 so `viewport()` always reports the size the event stream carries. Its
 capabilities are all false with `dpi_scale: 1.0`.
+
+### Window metadata query
+
+Every host answers the same deterministic window query, `PlatformAdapter::metadata()`, which
+returns a `WindowMetadata { title, dpi_scale }`. The default derives the title from `name()` and
+the DPI scale from `capabilities().dpi_scale`, so the headless, terminal and AppKit hosts all
+answer without a platform-specific override: headless and terminal report their host name with
+`dpi_scale: 1.0`, and the AppKit host reports its own name with the real `NSScreen`
+`backingScaleFactor` or the documented 1.0 fallback. The query is a pure read, so repeated calls
+return the identical value and a viewport change leaves it unchanged.
+
+```rust
+use opurom_platform::{Headless, PlatformAdapter};
+
+let host = Headless::new(2, 2);
+let metadata = host.metadata();
+assert_eq!(metadata.title, "headless");
+assert_eq!(metadata.dpi_scale, host.capabilities().dpi_scale);
+```
 
 ### AppKit host adapter (Verified on macOS)
 
