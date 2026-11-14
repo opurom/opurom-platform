@@ -1,8 +1,11 @@
-use opurom_platform::registry;
+use opurom_platform::{host_platforms, registry};
 
 fn main() {
+    // Default output stays the 14 target rows; `--hosts` lists the Verified hosts.
+    let hosts = std::env::args().any(|arg| arg.as_str() == "--hosts");
+    let contracts = if hosts { host_platforms() } else { registry() };
     println!("name | emitter | status | gpu | native_embed | multi_window");
-    for contract in registry() {
+    for contract in contracts {
         let caps = contract.capabilities;
         println!(
             "{} | {} | {} | {} | {} | {}",

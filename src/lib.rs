@@ -1,14 +1,18 @@
 //! Opurom platform adapter ABI 0.1.0 (normative: `the framework adapter contract`).
 //!
-//! Zero dependencies. Only `Headless` is implemented and Verified in 0.1.0; every
-//! OS-native / mini-program / web adapter, native widget embedding and GPU
-//! presentation are later rounds (capability+).
+//! Zero dependencies. `Headless` is the 0.1.0 reference adapter and conformance
+//! oracle; capability adds `Terminal` as a second fully implemented, Verified host adapter.
+//! Both are thin host adapters demonstrating the platform boundary, not GPU
+//! backends. OS-native / mini-program / web adapters, native widget embedding and
+//! Metal/Vulkan/ANGLE GPU presentation remain later rounds (capability+).
 
 use std::fmt;
 
 mod headless;
+mod terminal;
 
 pub use headless::Headless;
+pub use terminal::Terminal;
 
 /// Logical viewport size in pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,8 +114,9 @@ pub struct PlatformSpec {
     pub status: Status,
 }
 
-/// The headless reference adapter: the only Verified platform in 0.1.0.
-/// It is a host/adapter, not a target emitter, so it is not one of the 14 target rows.
+/// The headless reference adapter: a Verified host (0.1.0). It is a host/adapter, not
+/// a target emitter, so it is not one of the 14 target rows. capability adds `TERMINAL_SPEC`
+/// as a second Verified host.
 pub const HEADLESS_SPEC: PlatformSpec = PlatformSpec {
     name: "headless",
     emitter: "headless",
@@ -125,8 +130,26 @@ pub const HEADLESS_SPEC: PlatformSpec = PlatformSpec {
     status: Status::Verified,
 };
 
+/// capability Verified host adapter: terminal truecolor ANSI presentation (the capability contract
+/// framework rules). A thin host adapter demonstrating the platform boundary, not a GPU
+/// backend. Like `headless` it is a host, not one of the 14 target emitter rows, so
+/// it is exposed via `host_platforms()` / `spec_by_name()` / the CLI `--hosts` flag.
+pub const TERMINAL_SPEC: PlatformSpec = PlatformSpec {
+    name: "terminal",
+    emitter: "terminal",
+    capabilities: Capabilities {
+        gpu: false,
+        native_embed: false,
+        multi_window: false,
+        lifecycle: false,
+        dpi_scale: 1.0,
+    },
+    status: Status::Verified,
+};
+
 const fn caps(multi_window: bool, lifecycle: bool, dpi_scale: f32) -> Capabilities {
-    // GPU presentation and native widget embedding are capability+ work, false everywhere in 0.1.0.
+    // GPU presentation and native widget embedding are later rounds (capability+), false
+    // everywhere; the headless and terminal hosts never claim them either.
     Capabilities {
         gpu: false,
         native_embed: false,
@@ -139,20 +162,90 @@ const fn caps(multi_window: bool, lifecycle: bool, dpi_scale: f32) -> Capabiliti
 // `Scaffold` = a known emitter with a registry row, no runtime adapter yet.
 // `Planned` = no dedicated target emitter yet. Neither is implemented.
 const TARGET_SPECS: [PlatformSpec; 14] = [
-    PlatformSpec { name: "android", emitter: "native", capabilities: caps(false, true, 2.0), status: Status::Planned },
-    PlatformSpec { name: "ios", emitter: "native", capabilities: caps(false, true, 2.0), status: Status::Planned },
-    PlatformSpec { name: "harmony-mobile", emitter: "native", capabilities: caps(false, true, 2.0), status: Status::Planned },
-    PlatformSpec { name: "harmony-pc", emitter: "native", capabilities: caps(true, false, 1.0), status: Status::Planned },
-    PlatformSpec { name: "windows", emitter: "native", capabilities: caps(true, false, 1.0), status: Status::Planned },
-    PlatformSpec { name: "macos", emitter: "native", capabilities: caps(true, false, 1.0), status: Status::Planned },
-    PlatformSpec { name: "linux", emitter: "native", capabilities: caps(true, false, 1.0), status: Status::Planned },
-    PlatformSpec { name: "wechat", emitter: "wechat", capabilities: caps(false, true, 2.0), status: Status::Scaffold },
-    PlatformSpec { name: "alipay", emitter: "alipay", capabilities: caps(false, true, 2.0), status: Status::Scaffold },
-    PlatformSpec { name: "qq", emitter: "qq", capabilities: caps(false, true, 2.0), status: Status::Scaffold },
-    PlatformSpec { name: "douyin", emitter: "douyin", capabilities: caps(false, true, 2.0), status: Status::Scaffold },
-    PlatformSpec { name: "baidu", emitter: "baidu", capabilities: caps(false, true, 2.0), status: Status::Scaffold },
-    PlatformSpec { name: "kuaishou", emitter: "kuaishou", capabilities: caps(false, true, 2.0), status: Status::Scaffold },
-    PlatformSpec { name: "web", emitter: "web", capabilities: caps(false, true, 1.0), status: Status::Scaffold },
+    PlatformSpec {
+        name: "android",
+        emitter: "native",
+        capabilities: caps(false, true, 2.0),
+        status: Status::Planned,
+    },
+    PlatformSpec {
+        name: "ios",
+        emitter: "native",
+        capabilities: caps(false, true, 2.0),
+        status: Status::Planned,
+    },
+    PlatformSpec {
+        name: "harmony-mobile",
+        emitter: "native",
+        capabilities: caps(false, true, 2.0),
+        status: Status::Planned,
+    },
+    PlatformSpec {
+        name: "harmony-pc",
+        emitter: "native",
+        capabilities: caps(true, false, 1.0),
+        status: Status::Planned,
+    },
+    PlatformSpec {
+        name: "windows",
+        emitter: "native",
+        capabilities: caps(true, false, 1.0),
+        status: Status::Planned,
+    },
+    PlatformSpec {
+        name: "macos",
+        emitter: "native",
+        capabilities: caps(true, false, 1.0),
+        status: Status::Planned,
+    },
+    PlatformSpec {
+        name: "linux",
+        emitter: "native",
+        capabilities: caps(true, false, 1.0),
+        status: Status::Planned,
+    },
+    PlatformSpec {
+        name: "wechat",
+        emitter: "wechat",
+        capabilities: caps(false, true, 2.0),
+        status: Status::Scaffold,
+    },
+    PlatformSpec {
+        name: "alipay",
+        emitter: "alipay",
+        capabilities: caps(false, true, 2.0),
+        status: Status::Scaffold,
+    },
+    PlatformSpec {
+        name: "qq",
+        emitter: "qq",
+        capabilities: caps(false, true, 2.0),
+        status: Status::Scaffold,
+    },
+    PlatformSpec {
+        name: "douyin",
+        emitter: "douyin",
+        capabilities: caps(false, true, 2.0),
+        status: Status::Scaffold,
+    },
+    PlatformSpec {
+        name: "baidu",
+        emitter: "baidu",
+        capabilities: caps(false, true, 2.0),
+        status: Status::Scaffold,
+    },
+    PlatformSpec {
+        name: "kuaishou",
+        emitter: "kuaishou",
+        capabilities: caps(false, true, 2.0),
+        status: Status::Scaffold,
+    },
+    PlatformSpec {
+        name: "web",
+        emitter: "web",
+        capabilities: caps(false, true, 1.0),
+        status: Status::Scaffold,
+    },
 ];
 
 /// The 14 target platforms named by the framework implementation, one unique row each.
@@ -161,7 +254,9 @@ pub fn registry() -> Vec<PlatformSpec> {
     TARGET_SPECS.to_vec()
 }
 
-/// Every platform 0.1.0 knows about: the headless oracle plus the 14 targets.
+/// The frozen 0.1.0 listing: the headless oracle plus the 14 targets (15, one
+/// `Verified`). Kept in its capability shape as a stable regression oracle; capability Verified
+/// hosts are listed by `host_platforms()` and covered by `spec_by_name()`.
 pub fn all_platforms() -> Vec<PlatformSpec> {
     let mut all = Vec::with_capacity(TARGET_SPECS.len() + 1);
     all.push(HEADLESS_SPEC.clone());
@@ -169,7 +264,17 @@ pub fn all_platforms() -> Vec<PlatformSpec> {
     all
 }
 
-/// Query the registry by name, including the headless reference adapter.
+/// Fully implemented, `Verified` host adapters (run on any OS, not target emitters).
+/// capability adds `terminal` alongside the 0.1.0 `headless` oracle; listed by `--hosts`.
+pub fn host_platforms() -> Vec<PlatformSpec> {
+    vec![HEADLESS_SPEC.clone(), TERMINAL_SPEC.clone()]
+}
+
+/// Query any known platform by name: the 14 targets, the headless oracle and the
+/// capability terminal host.
 pub fn spec_by_name(name: &str) -> Option<PlatformSpec> {
-    all_platforms().into_iter().find(|contract| contract.name == name)
+    all_platforms()
+        .into_iter()
+        .chain(std::iter::once(TERMINAL_SPEC.clone()))
+        .find(|contract| contract.name == name)
 }
