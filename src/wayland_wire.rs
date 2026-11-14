@@ -7,8 +7,10 @@
 //! size (header included) and whose lower 16 bits are the opcode. Strings carry
 //! a length word, their NUL-terminated bytes and zero padding to a word boundary.
 //! Native host events are framed with the same layout so a recorded batch can
-//! be replayed without a live window.
+//! be replayed without a live window. Opcode 5 extends that event stream with
+//! a nine-word display-geometry message.
 
+use crate::display_geometry::{DisplayGeometry, FoldRegion, GeometryError, Posture, WindowRole};
 use crate::AdapterError;
 
 /// Every message starts with a 32-bit object ID and a 32-bit size/opcode word.
@@ -308,7 +310,8 @@ pub fn encode_create_buffer(
 /// Host-independent framing for the native hosts' normalized events. Win32
 /// packs a resize and signed 16-bit pointer coordinates into `lparam`; X11
 /// reports them as `c_int`. Both fit the 32-bit fields below, so the same
-/// message bytes are produced on every host.
+/// message bytes are produced on every host. `Geometry` carries the larger
+/// nine-word display-geometry payload on the same server-owned object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WireEvent {
     Resize { width: u32, height: u32 },
@@ -316,6 +319,7 @@ pub enum WireEvent {
     Release { x: i32, y: i32 },
     Move { x: i32, y: i32 },
     Focus { focused: bool },
+    Geometry(DisplayGeometry),
 }
 
 /// The server-created object that owns the event stream.
@@ -325,16 +329,28 @@ pub const EVENT_PRESS: u16 = 1;
 pub const EVENT_RELEASE: u16 = 2;
 pub const EVENT_MOVE: u16 = 3;
 pub const EVENT_FOCUS: u16 = 4;
+/// A full display geometry event: nine 32-bit words plus the shared header.
+pub const EVENT_GEOMETRY: u16 = 5;
+pub const GEOMETRY_BODY_LEN: usize = 36;
+pub const GEOMETRY_MESSAGE_LEN: usize = HEADER_LEN + GEOMETRY_BODY_LEN;
+/// Word 8 of a geometry event: bit 0 means words 6 and 7 carry a fold region.
+pub const GEOMETRY_FLAG_FOLD: u32 = 1;
 
 const BAD_EVENT_BODY: &str = "Wayland event body does not match its opcode";
 const BAD_FOCUS: &str = "Wayland focus event argument is invalid";
 const BAD_BATCH: &str = "Wayland event batch exceeds the event limit";
 const BAD_TRAILING: &str = "Wayland event batch ends with a partial message";
+const BAD_GEOMETRY: &str = "Wayland display geometry event is invalid";
 
 impl WireEvent {
-    /// One message with a two-word body; no padding is needed.
+    /// Two-word input/resize messages need no padding; geometry uses a
+    /// nine-word body with its own encoder.
     pub fn encode(self) -> Result<Vec<u8>, AdapterError> {
         let (opcode, first, second) = match self {
+            WireEvent::Geometry(geometry) => {
+                return encode_geometry_event(geometry)
+                    .map_err(|_| AdapterError::Backend(BAD_GEOMETRY));
+            }
             WireEvent::Resize { width, height } => {
                 (EVENT_RESIZE, width.to_ne_bytes(), height.to_ne_bytes())
             }
@@ -354,13 +370,134 @@ impl WireEvent {
     }
 }
 
+const GEOMETRY_WORD_COUNT: usize = GEOMETRY_BODY_LEN / 4;
+
+fn geometry_words(geometry: DisplayGeometry) -> [u32; GEOMETRY_WORD_COUNT] {
+    let (posture_tag, hinge_angle) = match geometry.posture {
+        Posture::Flat => (0, 0),
+        Posture::HalfOpened => (1, 0),
+        Posture::Book => (2, 0),
+        Posture::Hinge { angle } => (3, angle as u32),
+    };
+    let role_tag = match geometry.window_role {
+        WindowRole::Primary => 0,
+        WindowRole::Secondary => 1,
+        WindowRole::Split => 2,
+    };
+    let (fold_x, fold_width, flags) = match geometry.fold {
+        Some(fold) => (fold.x, fold.width, GEOMETRY_FLAG_FOLD),
+        None => (0, 0, 0),
+    };
+    [
+        geometry.width,
+        geometry.height,
+        geometry.dpi_scale,
+        posture_tag,
+        hinge_angle,
+        role_tag,
+        fold_x,
+        fold_width,
+        flags,
+    ]
+}
+
+/// Encode a validated `DisplayGeometry` as opcode 5 with nine native-endian
+/// words: width, height, DPI scale, posture tag, hinge angle, role tag,
+/// fold x, fold width and flags.
+pub fn encode_geometry_event(geometry: DisplayGeometry) -> Result<Vec<u8>, GeometryError> {
+    geometry.validate()?;
+    let mut body = Vec::with_capacity(GEOMETRY_BODY_LEN);
+    for word in geometry_words(geometry) {
+        body.extend_from_slice(&word.to_ne_bytes());
+    }
+    encode_message(EVENT_OBJECT_ID, EVENT_GEOMETRY, &body)
+        .map_err(|_| GeometryError::InvalidWireLength)
+}
+
+fn decode_geometry_body(body: &[u8]) -> Result<DisplayGeometry, GeometryError> {
+    if body.len() != GEOMETRY_BODY_LEN {
+        return Err(GeometryError::InvalidWireLength);
+    }
+    let mut words = [0u32; GEOMETRY_WORD_COUNT];
+    for (word, chunk) in words.iter_mut().zip(body.chunks_exact(4)) {
+        *word = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    }
+    let flags = words[8];
+    if flags & !GEOMETRY_FLAG_FOLD != 0 {
+        return Err(GeometryError::InvalidWireFlags);
+    }
+    let fold = if flags & GEOMETRY_FLAG_FOLD != 0 {
+        Some(FoldRegion {
+            x: words[6],
+            width: words[7],
+        })
+    } else {
+        if words[6] != 0 || words[7] != 0 {
+            return Err(GeometryError::InvalidWireFlags);
+        }
+        None
+    };
+    let angle = words[4];
+    let posture = match words[3] {
+        0..=2 => {
+            if angle != 0 {
+                return Err(GeometryError::UnexpectedHingeAngle);
+            }
+            match words[3] {
+                0 => Posture::Flat,
+                1 => Posture::HalfOpened,
+                _ => Posture::Book,
+            }
+        }
+        3 => Posture::Hinge {
+            angle: i32::try_from(angle).map_err(|_| GeometryError::HingeAngleOutOfRange)?,
+        },
+        _ => return Err(GeometryError::InvalidPostureTag),
+    };
+    let role = match words[5] {
+        0 => WindowRole::Primary,
+        1 => WindowRole::Secondary,
+        2 => WindowRole::Split,
+        _ => return Err(GeometryError::InvalidRoleTag),
+    };
+    DisplayGeometry::new(words[0], words[1], words[2], posture, role, fold)
+}
+
+/// Decode only a geometry event, preserving the concrete typed reason for a
+/// malformed header, object, opcode, flags, length or field. A partial message
+/// is `Ok(None)`.
+pub fn decode_geometry_event(
+    bytes: &[u8],
+) -> Result<Option<(DisplayGeometry, usize)>, GeometryError> {
+    let Some((parsed, body, size)) =
+        next_event(bytes).map_err(|_| GeometryError::InvalidWireHeader)?
+    else {
+        return Ok(None);
+    };
+    if parsed.object_id != EVENT_OBJECT_ID {
+        return Err(GeometryError::InvalidWireObject);
+    }
+    if parsed.opcode != EVENT_GEOMETRY {
+        return Err(GeometryError::InvalidWireOpcode);
+    }
+    Ok(Some((decode_geometry_body(body)?, size)))
+}
+
 /// Take the first complete event from a stream. A partial message is
 /// `Ok(None)`; a malformed one is a concrete `Err`, never a panic.
 pub fn decode_event(bytes: &[u8]) -> Result<Option<(WireEvent, usize)>, AdapterError> {
     let Some((parsed, body, size)) = next_event(bytes)? else {
         return Ok(None);
     };
-    if parsed.object_id != EVENT_OBJECT_ID || body.len() != 8 {
+    if parsed.object_id != EVENT_OBJECT_ID {
+        return Err(AdapterError::Backend(BAD_EVENT_BODY));
+    }
+    if parsed.opcode == EVENT_GEOMETRY {
+        let geometry =
+            decode_geometry_body(body).map_err(|_| AdapterError::Backend(BAD_GEOMETRY))?;
+        return Ok(Some((WireEvent::Geometry(geometry), size)));
+    }
+    if body.len() != 8 {
         return Err(AdapterError::Backend(BAD_EVENT_BODY));
     }
     let first = [body[0], body[1], body[2], body[3]];

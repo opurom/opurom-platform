@@ -132,6 +132,7 @@ renders a real frame. The mobile and handheld rows have no adapter and stay
 | `host_platforms()` | implemented `Verified` hosts; 3 rows on macOS, 2 elsewhere |
 | `known_platforms()` / `platforms_with()` / `supports()` | complete platform enumeration and queries over the four boolean `Capability` flags |
 | `WindowSet` | 2..4 independent viewports with isolated sizes, event FIFOs and frame buffers |
+| `display_geometry` | pure integer `DisplayGeometry` validation, `resolve_layout` decisions and the nine-word Wayland geometry event |
 | `PlatformViewRegistry` | deterministic native-view registry: shared 8-byte `OPV1` handle encoding, integer logical-pixel bounds, strict lifecycle and stable Z-order |
 | `frame_to_png(FrameView, path)` | real PNG output through a `CGImage` on macOS; documented `AppKitUnavailable` error elsewhere |
 | `open_window()` (macOS) | real `NSWindow`/`NSView`; draw, `cacheDisplay(in:to:)` capture, real PNG |
@@ -433,6 +434,46 @@ debugging. Each window keeps its own event FIFO, so a subsequent per-window
 `push_event` reaches only that window. This is deterministic viewport state,
 not a set of live OS windows.
 
+### Display geometry and fold-aware layout
+
+`src/display_geometry.rs` is pure, host-independent and integer-only.
+`DisplayGeometry::new(width, height, dpi_scale, posture, window_role, fold)`
+validates at the trust boundary and returns a typed `GeometryError`;
+`resolve_layout(geometry)` is total and never panics.
+
+| Field | Grammar |
+| --- | --- |
+| `width`, `height` | positive logical pixels (`u32`); zero is rejected |
+| `dpi_scale` | fixed point with `DPI_UNIT = 1024` meaning 1.0; bounded to `256..=4096` (0.25x..4.0x) |
+| `posture` | `Flat`, `HalfOpened`, `Book`, or `Hinge { angle: i32 }` with an inclusive `0..=180` angle |
+| `window_role` | `Primary`, `Secondary` or `Split` |
+| `fold` | `Option<FoldRegion { x, width }>`; the width is positive and `x + width` must lie inside `width` |
+
+A fold region may accompany any posture and denotes a physical hinge. A
+`Hinge` posture without an explicit fold gets a centered `DEFAULT_FOLD_WIDTH`
+(24 px) region, so hinge-aware layout always has a region to avoid. The five
+width tiers use the documented logical-pixel breakpoints:
+
+| Tier | Width | Device class | Columns | Base gutter |
+| --- | --- | --- | --- | --- |
+| `Compact` | `< 600` | compact phone | 1 | 8 |
+| `Medium` | `< 900` | wide phone | 2 | 12 |
+| `Expanded` | `< 1200` | tablet | 4 | 16 |
+| `Wide` | `< 1600` | desktop narrow | 8 | 20 |
+| `Ultra` | `>= 1600` | desktop full | 12 | 24 |
+
+`resolve_layout` returns `LayoutDecision { tier, columns, gutter,
+avoid_fold, split_ratio }`. A hinge increases the gutter by
+`HINGE_GUTTER_BONUS` (16 px, capped at `MAX_GUTTER = 64`) and returns a
+full-height `avoid_fold` rectangle covering the fold plus one gutter on each
+side, clamped to the display width. `split_ratio` is fixed point with
+`SPLIT_RATIO_UNIT = 1024` meaning 1.0: `0` means no split, `Split` with no
+hinge uses 512, and `Split` with a hinge uses the fold-center ratio clamped to
+`256..=768`. Every term is an integer division or a checked/saturating
+operation, so a resize, a fold/unfold transition or a tablet split gives the
+same decision on every host. `tests/display_geometry.rs` covers validation,
+all five tiers, split determinism, wire framing and malformed input.
+
 ### PlatformView bridge contract
 
 `src/platform_view.rs` is a deterministic, headless-testable native-view bridge
@@ -455,7 +496,7 @@ created -> attached -> resized -> input-forwarded -> disposed
 replaces the logical-pixel bounds. `forward_input(handle, event)` accepts
 `wayland_wire::WireEvent::Press`, `Move`, `Release` and `Focus` values; the
 first accepted input advances the view to `input-forwarded` and later inputs
-stay there. A `WireEvent::Resize` is rejected with
+stay there. `WireEvent::Resize` and `WireEvent::Geometry` are rejected with
 `PlatformViewError::InvalidInput`; out-of-order transitions return
 `PlatformViewError::OutOfOrderLifecycle` with the actual and expected states.
 Once disposed, a view returns `PlatformViewError::Disposed` for every input and
@@ -480,7 +521,8 @@ The handle frame is shared byte-for-byte with `opurom-mobile`:
 `PlatformViewError::InvalidHandle`. `platform_view` tests cover every state
 transition, duplicate and unregistered handles, negative bounds, disposed-input
 rejection and Z-order stability. The wire opcodes are in `wayland_wire.rs`
-(`EVENT_PRESS` 1, `EVENT_RELEASE` 2, `EVENT_MOVE` 3, `EVENT_FOCUS` 4).
+(`EVENT_PRESS` 1, `EVENT_RELEASE` 2, `EVENT_MOVE` 3, `EVENT_FOCUS` 4,
+`EVENT_GEOMETRY` 5).
 
 ### Degradation contract
 
@@ -558,6 +600,7 @@ libraries and the wire encoding is verified by `cargo test` everywhere.
 | String argument | `src/wayland_wire.rs` | 32-bit length including the NUL, the bytes, then zero padding to a word boundary |
 | `wl_shm` contract | `src/wayland_wire.rs` | 32-bit `ARGB8888`/`XRGB8888` formats at four bytes per pixel, a word-aligned stride of at least `width * 4`, and a pool size of `offset + stride * height` |
 | Event framing | `src/wayland_wire.rs` | resize, press/release/move and keyboard-focus events as two-word messages, a bounded batch decoder, and fixed-table round-trip tests |
+| Geometry event | `src/wayland_wire.rs` | opcode 5 on `EVENT_OBJECT_ID`: a 44-byte message with nine native-endian words carrying the validated display geometry and fold state |
 
 Native hosts normalize resize and pointer events into the same two 32-bit
 words: Win32 packs `WM_SIZE` and `WM_LBUTTONDOWN` coordinates into `lparam`,
@@ -567,6 +610,16 @@ messages on a server-owned object. Fixed tables cover resize widths 0, 1, 320,
 focus flags. `decode_batch` caps the
 event count and rejects a trailing partial message, so malformed or
 truncated buffers produce an `AdapterError` instead of panicking.
+
+The geometry event uses the same header with size 44 and opcode 5. Its nine
+body words are width, height, DPI scale, posture tag (0..3), hinge angle,
+window role tag (0..2), fold x, fold width and flags. Only flag bit 0 is
+defined; it names a fold region, and words 6 and 7 must be zero without it. The
+decoder rejects unknown flags, wrong lengths, wrong object/opcode, unknown
+tags, a hinge angle outside 0..180, an angle on a non-hinge posture, and any
+geometry that fails the table above. `decode_geometry_event` returns the
+concrete `GeometryError`; `decode_event` and `decode_batch` expose the same
+message as `WireEvent::Geometry` with an `AdapterError` on malformed bytes.
 
 The handshake assertions use concrete wire bytes; event framing uses
 fixed-table round-trip tests. On a little-endian host the handshake is:
