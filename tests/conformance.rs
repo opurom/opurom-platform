@@ -293,7 +293,7 @@ fn capabilities_are_sane() {
     }
 }
 
-// ---- capability: terminal host adapter (the capability contract framework rules) ----
+// ---- terminal host adapter (the framework rules framework rules) ----
 
 #[test]
 fn terminal_name_capabilities_and_viewport() {

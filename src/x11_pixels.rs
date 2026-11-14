@@ -1,4 +1,4 @@
-//! Pure pixel maths for the X11 adapter (the capability contract framework rules).
+//! Pure pixel maths for the X11 adapter (the surface implementation framework rules).
 //!
 //! Kept outside the Linux-gated `x11` module so the arithmetic is verified by
 //! `cargo test` on every host, including CI runners and macOS workstations.

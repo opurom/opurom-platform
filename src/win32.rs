@@ -1,4 +1,4 @@
-//! Win32 window host (the capability contract framework rules).
+//! Win32 window host (the surface implementation framework rules).
 //!
 //! This is compile-verified on the Windows GNU target; this repository has no
 //! Windows host or mingw linker, so no adapter is executed here. `WM_PAINT`
@@ -28,7 +28,7 @@ use crate::{AdapterError, Capabilities, FrameView, InputEvent, Lifecycle, Platfo
 
 const INVALID_STATE: &str = "Win32 state mutex is poisoned";
 
-// shortcut: one window per process in capability; use per-HWND state for multi-window.
+// shortcut: one window per process; use per-HWND state for multi-window.
 static CLASS: OnceLock<u16> = OnceLock::new();
 static STATE: Mutex<Win32State> = Mutex::new(Win32State::new());
 
@@ -108,7 +108,7 @@ fn register_class() -> u16 {
             hCursor: LoadCursorW(0, IDC_ARROW),
             hbrBackground: 0,
             lpszMenuName: std::ptr::null(),
-            lpszClassName: w!("OpuromCapabilityWindow"),
+            lpszClassName: w!("OpuromWindow"),
         };
         RegisterClassW(&class)
     }
@@ -249,8 +249,8 @@ impl Win32Host {
         let hwnd = unsafe {
             CreateWindowExW(
                 0,
-                w!("OpuromCapabilityWindow"),
-                w!("Opurom capability"),
+                w!("OpuromWindow"),
+                w!("Opurom Window"),
                 WS_OVERLAPPEDWINDOW,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,

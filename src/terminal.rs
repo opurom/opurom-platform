@@ -1,4 +1,4 @@
-//! Terminal host adapter (the capability contract framework rules): deterministic truecolor ANSI
+//! Terminal host adapter (the framework rules framework rules): deterministic truecolor ANSI
 //! half-block presentation of an RGBA frame. This is a thin host adapter that
 //! demonstrates the platform boundary; it is NOT a Metal/Vulkan/ANGLE GPU backend.
 

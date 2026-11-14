@@ -1,17 +1,18 @@
 //! Opurom platform adapter ABI 0.1.0 (normative: `the framework adapter contract`).
 //!
-//! `Headless` is the 0.1.0 reference adapter and conformance oracle; capability adds
-//! `Terminal`. capability adds the macOS-only `MacHost` with a real AppKit/CAMetalLayer
-//! host descriptor, a headlessly verifiable PNG path and `WindowSet`. capability adds
-//! compile-verified Win32/X11 window hosts and macOS accessibility posting.
-//! capability adds a runtime-loaded Metal drawable presentation path for the live
+//! `Headless` is the 0.1.0 reference adapter and conformance oracle; the terminal host adds
+//! `Terminal`. The macOS host adds the `MacHost` with a real AppKit/CAMetalLayer
+//! host descriptor, a headlessly verifiable PNG path and `WindowSet`. The native surfaces
+//! add compile-verified Win32/X11 window hosts and macOS accessibility posting.
+//! The GPU presentation path adds a runtime-loaded Metal drawable presentation for the live
 //! AppKit window. The AppKit/CoreGraphics dependencies are target-scoped, so
 //! Linux CI builds the ABI and the cross-platform hosts without AppKit. Native
-//! widget trees, Wayland and HarmonyOS remain capability+.
+//! widget trees, Wayland and HarmonyOS are planned for later releases.
 
 use std::fmt;
 
 mod a11y;
+pub mod gpu_animation;
 pub mod gpu_presentation;
 mod headless;
 mod pixel;
@@ -38,10 +39,11 @@ pub use a11y::{
     map_a11y_tree, parse_a11y_json, post_a11y_tree, A11yNode, A11yPost, AxElement, AxRole,
     DEFAULT_A11Y_TREE, SKIP_A11Y_ENV,
 };
+pub use gpu_animation::{verify_gpu_animation_loop, ANIMATION_FLAG, ANIMATION_TICKS};
 pub use gpu_presentation::{
-    classify, gpu_library_path, present_display_list, workspace_root, PresentationOutcome,
-    GPU_DYLIB_ENV, PRESENT_ERROR, PRESENT_INVALID_ARGUMENT, PRESENT_METAL_UNAVAILABLE,
-    PRESENT_NO_DRAWABLE, PRESENT_OK, PRESENT_UNSUPPORTED,
+    classify, gpu_library_path, present_animation_frame, present_display_list, workspace_root,
+    FrameTimings, PresentationOutcome, GPU_DYLIB_ENV, PRESENT_ERROR, PRESENT_INVALID_ARGUMENT,
+    PRESENT_METAL_UNAVAILABLE, PRESENT_NO_DRAWABLE, PRESENT_OK, PRESENT_UNSUPPORTED,
 };
 pub use headless::Headless;
 pub use pixel::{compare_rgba_to_ppm, PixelComparison, CHANNEL_TOLERANCE, MISMATCH_BUDGET_PERCENT};
@@ -49,8 +51,8 @@ pub use png::frame_to_png;
 pub use ppm::{read_ppm, PpmImage};
 pub use terminal::Terminal;
 pub use verify::{
-    compare_capture, render_reference_ppm, render_reference_with_commands, software_renderer_path,
-    Verification,
+    compare_capture, render_animation_frame, render_reference_ppm, render_reference_with_commands,
+    software_renderer_path, Verification,
 };
 pub use window_set::WindowSet;
 
@@ -165,8 +167,8 @@ pub struct PlatformSpec {
 }
 
 /// The headless reference adapter: a Verified host (0.1.0). It is a host/adapter, not
-/// a target emitter, so it is not one of the 14 target rows. capability adds `TERMINAL_SPEC`
-/// as a second Verified host.
+/// a target emitter, so it is not one of the 14 target rows. The terminal host adds
+/// `TERMINAL_SPEC` as a second Verified host.
 pub const HEADLESS_SPEC: PlatformSpec = PlatformSpec {
     name: "headless",
     emitter: "headless",
@@ -180,8 +182,8 @@ pub const HEADLESS_SPEC: PlatformSpec = PlatformSpec {
     status: Status::Verified,
 };
 
-/// capability Verified host adapter: terminal truecolor ANSI presentation (the capability contract
-/// framework rules). A thin host adapter demonstrating the platform boundary, not a GPU
+/// The terminal Verified host adapter: truecolor ANSI presentation
+/// (the framework rules framework rules). A thin host adapter demonstrating the platform boundary, not a GPU
 /// backend. Like `headless` it is a host, not one of the 14 target emitter rows, so
 /// it is exposed via `host_platforms()` / `spec_by_name()` / the CLI `--hosts` flag.
 pub const TERMINAL_SPEC: PlatformSpec = PlatformSpec {
@@ -213,9 +215,9 @@ pub const REFERENCE_PPM_ENV: &str = "OPR_REFERENCE_PPM";
 /// reference PPM.
 pub const RENDERER_BIN_ENV: &str = "Opurom_RENDER_BIN";
 
-/// capability Verified host on macOS. `native_embed` marks the real `NSView` /
+/// The Verified host on macOS. `native_embed` marks the real `NSView` /
 /// `CAMetalLayer` native host surface, not an embedded widget tree; `gpu` stays
-/// false because `PlatformAdapter::present` writes a PNG. The separate capability
+/// false because `PlatformAdapter::present` writes a PNG. The separate
 /// `--verify-gpu-presentation` CLI uses a real Metal drawable; it does not
 /// change the adapter ABI or this frozen capability row.
 /// `dpi_scale` is a documented 1.0 fallback; `appkit_capabilities()` replaces it
@@ -341,8 +343,8 @@ pub fn registry() -> Vec<PlatformSpec> {
 }
 
 /// The frozen 0.1.0 listing: the headless oracle plus the 14 targets (15, one
-/// `Verified`). Kept in its capability shape as a stable regression oracle; capability Verified
-/// hosts are listed by `host_platforms()` and covered by `spec_by_name()`.
+/// `Verified`). Kept in its original shape as a stable regression oracle; the terminal
+/// and AppKit Verified hosts are listed by `host_platforms()` and covered by `spec_by_name()`.
 pub fn all_platforms() -> Vec<PlatformSpec> {
     let mut all = Vec::with_capacity(TARGET_SPECS.len() + 1);
     all.push(HEADLESS_SPEC.clone());
@@ -359,7 +361,7 @@ pub fn appkit_capabilities() -> Capabilities {
     capabilities
 }
 
-/// The capability AppKit host row with its measured/fallback DPI scale.
+/// The AppKit host row with its measured/fallback DPI scale.
 #[cfg(target_os = "macos")]
 pub fn appkit_spec() -> PlatformSpec {
     let mut contract = APPKIT_SPEC.clone();
@@ -367,8 +369,8 @@ pub fn appkit_spec() -> PlatformSpec {
     contract
 }
 
-/// Fully implemented, `Verified` host adapters (not target emitters). capability adds
-/// `terminal`; capability adds `appkit` on macOS only. Listed by `--hosts`.
+/// Fully implemented, `Verified` host adapters (not target emitters). The terminal host
+/// is always listed; `appkit` is added on macOS only. Listed by `--hosts`.
 pub fn host_platforms() -> Vec<PlatformSpec> {
     #[allow(unused_mut)]
     let mut hosts = vec![HEADLESS_SPEC.clone(), TERMINAL_SPEC.clone()];
@@ -378,7 +380,7 @@ pub fn host_platforms() -> Vec<PlatformSpec> {
 }
 
 /// Query any known platform by name: the 14 targets, the headless oracle, the
-/// capability terminal host and (on macOS) the capability AppKit host.
+/// the terminal host and (on macOS) the AppKit host.
 pub fn spec_by_name(name: &str) -> Option<PlatformSpec> {
     let mut known = all_platforms();
     known.push(TERMINAL_SPEC.clone());
