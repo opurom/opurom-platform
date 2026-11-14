@@ -234,9 +234,15 @@ fn render_frame_png(ir: &Path, width: u32, height: u32) -> Result<Vec<u8>, Strin
 }
 
 /// The on-screen verification is macOS only; other hosts report SKIP.
+/// The explicit override takes precedence on every platform so CI can
+/// request a deterministic, named SKIP without depending on host detection.
 #[cfg(not(target_os = "macos"))]
 fn verify_window(_args: &[String]) -> i32 {
-    println!("SKIP the native window verification is macOS only");
+    if std::env::var_os("OPR_SKIP_WINDOW").is_some() {
+        println!("SKIP OPR_SKIP_WINDOW is set");
+    } else {
+        println!("SKIP the native window verification is macOS only");
+    }
     0
 }
 
