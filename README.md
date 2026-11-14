@@ -132,6 +132,7 @@ renders a real frame. The mobile and handheld rows have no adapter and stay
 | `host_platforms()` | implemented `Verified` hosts; 3 rows on macOS, 2 elsewhere |
 | `known_platforms()` / `platforms_with()` / `supports()` | complete platform enumeration and queries over the four boolean `Capability` flags |
 | `WindowSet` | 2..4 independent viewports with isolated sizes, event FIFOs and frame buffers |
+| `PlatformViewRegistry` | deterministic native-view registry: shared 8-byte `OPV1` handle encoding, integer logical-pixel bounds, strict lifecycle and stable Z-order |
 | `frame_to_png(FrameView, path)` | real PNG output through a `CGImage` on macOS; documented `AppKitUnavailable` error elsewhere |
 | `open_window()` (macOS) | real `NSWindow`/`NSView`; draw, `cacheDisplay(in:to:)` capture, real PNG |
 | `compare_rgba_to_ppm` | captured window pixels vs the software renderer PPM, with a documented tolerance |
@@ -432,6 +433,55 @@ debugging. Each window keeps its own event FIFO, so a subsequent per-window
 `push_event` reaches only that window. This is deterministic viewport state,
 not a set of live OS windows.
 
+### PlatformView bridge contract
+
+`src/platform_view.rs` is a deterministic, headless-testable native-view bridge
+contract in the Flutter `PlatformView` model. It is pure Rust and runs on every
+host, so native widget bridges can be validated without a live window.
+
+`PlatformViewRegistry::register(handle, bounds, z_order)` adds a view in the
+`created` state. Bounds are integer logical pixels (`x`, `y`, `width`,
+`height`); any negative component returns
+`PlatformViewError::NegativeBounds`. Re-registering a live or disposed handle
+returns `PlatformViewError::DuplicateHandle`.
+
+Lifecycle is strictly sequential:
+
+```text
+created -> attached -> resized -> input-forwarded -> disposed
+```
+
+`attach`, `resize` and `dispose` advance one documented step. `resize` also
+replaces the logical-pixel bounds. `forward_input(handle, event)` accepts
+`wayland_wire::WireEvent::Press`, `Move`, `Release` and `Focus` values; the
+first accepted input advances the view to `input-forwarded` and later inputs
+stay there. A `WireEvent::Resize` is rejected with
+`PlatformViewError::InvalidInput`; out-of-order transitions return
+`PlatformViewError::OutOfOrderLifecycle` with the actual and expected states.
+Once disposed, a view returns `PlatformViewError::Disposed` for every input and
+is excluded from `composite_order()`.
+
+`composite_order()` returns the live views in ascending Z-order, tie-broken by
+registration order. `SELF_DRAWN_Z_ORDER` (`0`) is the Z-order of self-drawn
+nodes: negative values compose behind and positive values compose in front.
+`set_z_order(handle, z_order)` moves a live view; equal Z-order keeps
+registration order, so repeated calls are stable. `unregister(handle)` removes
+a view and returns its final state; an unregistered handle returns
+`PlatformViewError::UnregisteredHandle`.
+
+The handle frame is shared byte-for-byte with `opurom-mobile`:
+
+```text
+4f 50 56 31 | handle as little-endian u32
+```
+
+`ViewHandle::encode()` produces the 8-byte `OPV1` frame and
+`ViewHandle::decode()` validates the magic and length; a bad frame returns
+`PlatformViewError::InvalidHandle`. `platform_view` tests cover every state
+transition, duplicate and unregistered handles, negative bounds, disposed-input
+rejection and Z-order stability. The wire opcodes are in `wayland_wire.rs`
+(`EVENT_PRESS` 1, `EVENT_RELEASE` 2, `EVENT_MOVE` 3, `EVENT_FOCUS` 4).
+
 ### Degradation contract
 
 An adapter that returns `Err` three times consecutively is degraded: the kernel
@@ -507,15 +557,15 @@ libraries and the wire encoding is verified by `cargo test` everywhere.
 | Message header | `src/wayland_wire.rs` | 32-bit object ID, then a word with the size in the upper 16 bits and the opcode in the lower 16 bits, native-endian, word-aligned padding |
 | String argument | `src/wayland_wire.rs` | 32-bit length including the NUL, the bytes, then zero padding to a word boundary |
 | `wl_shm` contract | `src/wayland_wire.rs` | 32-bit `ARGB8888`/`XRGB8888` formats at four bytes per pixel, a word-aligned stride of at least `width * 4`, and a pool size of `offset + stride * height` |
-| Event framing | `src/wayland_wire.rs` | resize and press/release/move events as two-word messages, a bounded batch decoder, and fixed-table round-trip tests |
+| Event framing | `src/wayland_wire.rs` | resize, press/release/move and keyboard-focus events as two-word messages, a bounded batch decoder, and fixed-table round-trip tests |
 
 Native hosts normalize resize and pointer events into the same two 32-bit
 words: Win32 packs `WM_SIZE` and `WM_LBUTTONDOWN` coordinates into `lparam`,
 while X11 reads `c_int` fields from `XEvent`. `WireEvent` frames them as
 messages on a server-owned object. Fixed tables cover resize widths 0, 1, 320,
-1600 and 4096, press/release/move at signed coordinate boundaries, and
-multi-event batches that decode back to identical values. `decode_batch` caps
-the event count and rejects a trailing partial message, so malformed or
+1600 and 4096, press/release/move at signed coordinate boundaries, and keyboard
+focus flags. `decode_batch` caps the
+event count and rejects a trailing partial message, so malformed or
 truncated buffers produce an `AdapterError` instead of panicking.
 
 The handshake assertions use concrete wire bytes; event framing uses
@@ -626,14 +676,15 @@ From the umbrella root the built CLI can be invoked directly as
 `./opurom-platform/target/debug/opurom-platform --verify-gpu-presentation --out /tmp/opurom-gpu-presentation.png`;
 the renderer, IR and GPU dylib paths are absolute and CWD-independent.
 
-`cargo test --offline` runs **101 tests** on macOS: 43 library unit tests
-(including four pure animation-loop checks and fifteen pure Wayland wire checks),
-two accessibility tests, eleven
-AppKit host tests, two CLI tests, twenty-five conformance tests, seven
+`cargo test --offline` runs **115 tests** on macOS: 52 library unit tests
+(including four pure animation-loop checks, fifteen pure Wayland wire checks
+and nine PlatformView checks), two accessibility tests, eleven
+AppKit host tests, two CLI tests, twenty-six conformance tests, seven
 animation-loop integration tests, four GPU presentation integration tests
 (presentation-on-screen, forced SKIP, missing-dylib SKIP and status honesty),
-four native-window tests and three Wayland integration tests
-(missing display, empty display and a named display without a compositor).
+four native-window tests, three Wayland integration tests
+(missing display, empty display and a named display without a compositor) and
+four window-metadata tests.
 Win32 adds two, X11 adds three and Wayland adds one pure unit test that are
 compiled, not
 executed, by their target's `--all-targets` check. The Linux source has no

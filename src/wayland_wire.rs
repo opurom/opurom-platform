@@ -315,6 +315,7 @@ pub enum WireEvent {
     Press { x: i32, y: i32 },
     Release { x: i32, y: i32 },
     Move { x: i32, y: i32 },
+    Focus { focused: bool },
 }
 
 /// The server-created object that owns the event stream.
@@ -323,8 +324,10 @@ pub const EVENT_RESIZE: u16 = 0;
 pub const EVENT_PRESS: u16 = 1;
 pub const EVENT_RELEASE: u16 = 2;
 pub const EVENT_MOVE: u16 = 3;
+pub const EVENT_FOCUS: u16 = 4;
 
 const BAD_EVENT_BODY: &str = "Wayland event body does not match its opcode";
+const BAD_FOCUS: &str = "Wayland focus event argument is invalid";
 const BAD_BATCH: &str = "Wayland event batch exceeds the event limit";
 const BAD_TRAILING: &str = "Wayland event batch ends with a partial message";
 
@@ -338,6 +341,11 @@ impl WireEvent {
             WireEvent::Press { x, y } => (EVENT_PRESS, x.to_ne_bytes(), y.to_ne_bytes()),
             WireEvent::Release { x, y } => (EVENT_RELEASE, x.to_ne_bytes(), y.to_ne_bytes()),
             WireEvent::Move { x, y } => (EVENT_MOVE, x.to_ne_bytes(), y.to_ne_bytes()),
+            WireEvent::Focus { focused } => (
+                EVENT_FOCUS,
+                (focused as i32).to_ne_bytes(),
+                0i32.to_ne_bytes(),
+            ),
         };
         let mut body = Vec::with_capacity(8);
         body.extend_from_slice(&first);
@@ -374,6 +382,13 @@ pub fn decode_event(bytes: &[u8]) -> Result<Option<(WireEvent, usize)>, AdapterE
             x: i32::from_ne_bytes(first),
             y: i32::from_ne_bytes(second),
         },
+        EVENT_FOCUS => {
+            let flag = i32::from_ne_bytes(first);
+            if flag != 0 && flag != 1 {
+                return Err(AdapterError::Backend(BAD_FOCUS));
+            }
+            WireEvent::Focus { focused: flag == 1 }
+        }
         _ => return Err(AdapterError::Backend(BAD_EVENT_BODY)),
     };
     Ok(Some((event, size)))
@@ -734,6 +749,8 @@ mod tests {
             cases.push(WireEvent::Release { x, y });
             cases.push(WireEvent::Move { x, y });
         }
+        cases.push(WireEvent::Focus { focused: false });
+        cases.push(WireEvent::Focus { focused: true });
         cases
     }
 
@@ -770,6 +787,20 @@ mod tests {
                 &[
                     0xff, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x01, 0x40, 0x00,
                     0x00, 0x06, 0x40,
+                ],
+            ),
+        );
+        // Focus is the same two-word framing with a one-word flag.
+        assert_eq!(
+            WireEvent::Focus { focused: true }.encode().unwrap(),
+            native(
+                &[
+                    0x00, 0x00, 0x00, 0xff, 0x04, 0x00, 0x10, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00,
+                ],
+                &[
+                    0xff, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01, 0x00,
+                    0x00, 0x00, 0x00,
                 ],
             ),
         );
@@ -853,6 +884,13 @@ mod tests {
         assert_eq!(
             decode_event(&short),
             Err(AdapterError::Backend(BAD_EVENT_BODY))
+        );
+        // The focus flag is either zero or one; another value is malformed.
+        let mut invalid_focus = WireEvent::Focus { focused: true }.encode().unwrap();
+        invalid_focus[8] = 2;
+        assert_eq!(
+            decode_event(&invalid_focus),
+            Err(AdapterError::Backend(BAD_FOCUS))
         );
         // A claimed size beyond the available bytes is a partial stream.
         let mut long = good.clone();
