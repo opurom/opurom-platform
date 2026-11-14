@@ -11,8 +11,10 @@
 //! and handle frame are shared with the mobile JNI/iOS side.
 //! `display_geometry` adds an integer-only fold-aware geometry model, a pure
 //! responsive layout resolver and a framed geometry event for split-screen and
-//! foldable transitions. The AppKit/CoreGraphics dependencies are target-scoped, so
-//! Linux CI builds the ABI and the cross-platform hosts without AppKit.
+//! foldable transitions. `viewport_layout` applies those decisions to host
+//! viewport state without changing framebuffer dimensions. The AppKit/CoreGraphics
+//! dependencies are target-scoped, so Linux CI builds the ABI and the
+//! cross-platform hosts without AppKit.
 
 use std::fmt;
 
@@ -35,6 +37,7 @@ mod x11_pixels;
 // header, the wire events and the wl_shm buffer contract. It has no OS
 // dependency, so it is compiled on every host and verified by `cargo test`.
 pub mod platform_view;
+pub mod viewport_layout;
 pub mod wayland_wire;
 
 #[cfg(target_os = "macos")]
@@ -77,6 +80,7 @@ pub use verify::{
     compare_capture, render_animation_frame, render_reference_ppm, render_reference_with_commands,
     software_renderer_path, Verification,
 };
+pub use viewport_layout::{layout_patch, LayoutPatch};
 pub use window_set::WindowSet;
 
 #[cfg(target_os = "macos")]
@@ -185,6 +189,17 @@ pub trait PlatformAdapter {
             title: self.name().to_owned(),
             dpi_scale: self.capabilities().dpi_scale,
         }
+    }
+
+    /// Typed layout state; plain adapters derive a no-hinge patch from their
+    /// raw viewport.
+    fn layout(&self) -> LayoutPatch {
+        LayoutPatch::from_size(self.viewport())
+    }
+
+    /// Hinge-shifted content rectangle. The raw framebuffer size is unchanged.
+    fn content_viewport(&self) -> Rect {
+        self.layout().content
     }
 }
 

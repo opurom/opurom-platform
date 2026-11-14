@@ -1,6 +1,9 @@
 //! Deterministic 2..4 viewport state shared by the multi-window host.
 
-use crate::{AdapterError, FrameView, Headless, InputEvent, PlatformAdapter, Size};
+use crate::wayland_wire::{decode_batch, WireEvent};
+use crate::{
+    AdapterError, FrameView, Headless, InputEvent, LayoutPatch, PlatformAdapter, Rect, Size,
+};
 
 const INVALID_WINDOW_INDEX: &str = "invalid window index";
 const INVALID_WINDOW_COUNT: &str = "WindowSet requires 2..4 viewports";
@@ -29,10 +32,21 @@ impl WindowSet {
         self.windows.len()
     }
 
-    /// Viewport of every window in index order, for hosts that lay out a
-    /// multi-window surface in one pass.
+    /// Raw framebuffer size of every window in index order.
     pub fn viewports(&self) -> Vec<Size> {
         self.windows.iter().map(Headless::viewport).collect()
+    }
+
+    /// Hinge-shifted content rectangle of every window in index order.
+    pub fn content_viewports(&self) -> Vec<Rect> {
+        self.windows
+            .iter()
+            .map(Headless::content_viewport)
+            .collect()
+    }
+
+    pub fn layouts(&self) -> Vec<LayoutPatch> {
+        self.windows.iter().map(Headless::layout).collect()
     }
 
     /// Deliver the same normalized input to every window. Used by synchronized
@@ -55,9 +69,36 @@ impl WindowSet {
         Ok(self.window(index)?.viewport())
     }
 
+    pub fn content_viewport(&self, index: usize) -> Result<Rect, AdapterError> {
+        Ok(self.window(index)?.content_viewport())
+    }
+
+    pub fn layout(&self, index: usize) -> Result<LayoutPatch, AdapterError> {
+        Ok(self.window(index)?.layout())
+    }
+
     pub fn resize(&mut self, index: usize, size: Size) -> Result<(), AdapterError> {
         self.window_mut(index)?.resize(size);
         Ok(())
+    }
+
+    pub fn apply_wire_event(&mut self, index: usize, event: WireEvent) -> Result<(), AdapterError> {
+        self.window_mut(index)?.apply_wire_event(event)
+    }
+
+    /// Decode a bounded wire batch and apply its layout events to every window.
+    pub fn apply_wire_batch(
+        &mut self,
+        bytes: &[u8],
+        limit: usize,
+    ) -> Result<Vec<WireEvent>, AdapterError> {
+        let events = decode_batch(bytes, limit)?;
+        for window in &mut self.windows {
+            for &event in &events {
+                window.apply_wire_event(event)?;
+            }
+        }
+        Ok(events)
     }
 
     pub fn push_event(&mut self, index: usize, event: InputEvent) -> Result<(), AdapterError> {

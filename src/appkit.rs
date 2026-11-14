@@ -21,9 +21,10 @@ use objc2_app_kit::{
 use objc2_foundation::{NSDate, NSPoint, NSRect, NSRunLoop, NSSize};
 use objc2_quartz_core::{CAMetalLayer, CATransaction};
 
+use crate::wayland_wire::WireEvent;
 use crate::{
     appkit_capabilities, frame_to_png, AdapterError, Capabilities, FrameView, Headless, InputEvent,
-    PlatformAdapter, Size, APPKIT_SPEC,
+    LayoutPatch, PlatformAdapter, Rect, Size, APPKIT_SPEC,
 };
 
 const WINDOW_STYLE_NAME: &str = "Titled|Closable|Miniaturizable|Resizable";
@@ -186,6 +187,22 @@ impl MacHost {
         self.headless.resize(size);
     }
 
+    pub fn layout(&self) -> LayoutPatch {
+        self.headless.layout()
+    }
+
+    pub fn content_viewport(&self) -> Rect {
+        self.headless.content_viewport()
+    }
+
+    pub fn apply_wire_event(&mut self, event: WireEvent) -> Result<(), AdapterError> {
+        self.headless.apply_wire_event(event)
+    }
+
+    pub fn apply_wire_bytes(&mut self, bytes: &[u8]) -> Result<Option<WireEvent>, AdapterError> {
+        self.headless.apply_wire_bytes(bytes)
+    }
+
     pub fn frame(&self) -> FrameView<'_> {
         self.headless.frame()
     }
@@ -254,6 +271,10 @@ impl PlatformAdapter for MacHost {
 
     fn viewport(&self) -> Size {
         self.headless.viewport()
+    }
+
+    fn layout(&self) -> LayoutPatch {
+        self.headless.layout()
     }
 
     fn poll_event(&mut self) -> Option<InputEvent> {

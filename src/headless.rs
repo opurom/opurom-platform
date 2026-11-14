@@ -1,8 +1,12 @@
 use std::collections::VecDeque;
 
+use crate::wayland_wire::{decode_batch, WireEvent};
 use crate::{
-    AdapterError, Capabilities, FrameView, InputEvent, PlatformAdapter, Size, HEADLESS_SPEC,
+    layout_patch, AdapterError, Capabilities, FrameView, InputEvent, LayoutPatch, PlatformAdapter,
+    Rect, Size, HEADLESS_SPEC,
 };
+
+const BAD_LAYOUT: &str = "viewport layout event is invalid";
 
 /// Fully implemented 0.1.0 reference adapter and conformance oracle.
 /// No windowing dependency; runs on any OS.
@@ -13,12 +17,14 @@ pub struct Headless {
     events: VecDeque<InputEvent>,
     pixels: Vec<u8>,
     digest: String,
+    layout: LayoutPatch,
 }
 
 impl Headless {
     pub fn new(width: u32, height: u32) -> Self {
+        let viewport = Size { width, height };
         Self {
-            viewport: Size { width, height },
+            viewport,
             frame_size: Size {
                 width: 0,
                 height: 0,
@@ -26,6 +32,7 @@ impl Headless {
             events: VecDeque::new(),
             pixels: Vec::new(),
             digest: hex(fnv1a(&[])),
+            layout: LayoutPatch::from_size(viewport),
         }
     }
 
@@ -36,8 +43,45 @@ impl Headless {
 
     /// Update the viewport and enqueue a `Resize` event.
     pub fn resize(&mut self, size: Size) {
-        self.viewport = size;
-        self.events.push_back(InputEvent::Resize { size });
+        self.apply_layout(LayoutPatch::from_size(size));
+    }
+
+    /// Typed layout metadata for this window, including the content rectangle.
+    pub fn layout(&self) -> LayoutPatch {
+        self.layout
+    }
+
+    pub fn content_viewport(&self) -> Rect {
+        self.layout.content
+    }
+
+    /// Apply one decoded wire event. Pointer events do not change viewport state.
+    pub fn apply_wire_event(&mut self, event: WireEvent) -> Result<(), AdapterError> {
+        match event {
+            WireEvent::Resize { width, height } => self.resize(Size { width, height }),
+            WireEvent::Geometry(geometry) => {
+                let patch =
+                    layout_patch(geometry).map_err(|_| AdapterError::Backend(BAD_LAYOUT))?;
+                self.apply_layout(patch);
+            }
+            WireEvent::LayoutPatch(patch) => {
+                patch
+                    .validate()
+                    .map_err(|_| AdapterError::Backend(BAD_LAYOUT))?;
+                self.apply_layout(patch);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Decode exactly one complete event, rejecting malformed or trailing bytes.
+    pub fn apply_wire_bytes(&mut self, bytes: &[u8]) -> Result<Option<WireEvent>, AdapterError> {
+        let Some(event) = decode_batch(bytes, 1)?.into_iter().next() else {
+            return Ok(None);
+        };
+        self.apply_wire_event(event)?;
+        Ok(Some(event))
     }
 
     /// The last presented frame, borrowed from the internal buffer.
@@ -53,6 +97,13 @@ impl Headless {
     pub fn digest(&self) -> &str {
         &self.digest
     }
+
+    fn apply_layout(&mut self, layout: LayoutPatch) {
+        self.viewport = layout.frame;
+        self.layout = layout;
+        self.events
+            .push_back(InputEvent::Resize { size: layout.frame });
+    }
 }
 
 impl PlatformAdapter for Headless {
@@ -66,6 +117,10 @@ impl PlatformAdapter for Headless {
 
     fn viewport(&self) -> Size {
         self.viewport
+    }
+
+    fn layout(&self) -> LayoutPatch {
+        self.layout
     }
 
     fn poll_event(&mut self) -> Option<InputEvent> {

@@ -8,10 +8,15 @@
 //! a length word, their NUL-terminated bytes and zero padding to a word boundary.
 //! Native host events are framed with the same layout so a recorded batch can
 //! be replayed without a live window. Opcode 5 extends that event stream with
-//! a nine-word display-geometry message.
+//! a nine-word display-geometry message; opcode 6 carries its resolved layout
+//! patch.
 
-use crate::display_geometry::{DisplayGeometry, FoldRegion, GeometryError, Posture, WindowRole};
-use crate::AdapterError;
+use crate::display_geometry::{
+    DisplayGeometry, FoldRegion, GeometryError, LayoutDecision, LayoutTier, Posture, Rect,
+    WindowRole,
+};
+use crate::viewport_layout::LayoutPatch;
+use crate::{AdapterError, Size};
 
 /// Every message starts with a 32-bit object ID and a 32-bit size/opcode word.
 pub const HEADER_LEN: usize = 8;
@@ -311,7 +316,8 @@ pub fn encode_create_buffer(
 /// packs a resize and signed 16-bit pointer coordinates into `lparam`; X11
 /// reports them as `c_int`. Both fit the 32-bit fields below, so the same
 /// message bytes are produced on every host. `Geometry` carries the larger
-/// nine-word display-geometry payload on the same server-owned object.
+/// nine-word display-geometry payload on the same server-owned object;
+/// `LayoutPatch` carries the deterministic decision derived from it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WireEvent {
     Resize { width: u32, height: u32 },
@@ -320,6 +326,7 @@ pub enum WireEvent {
     Move { x: i32, y: i32 },
     Focus { focused: bool },
     Geometry(DisplayGeometry),
+    LayoutPatch(LayoutPatch),
 }
 
 /// The server-created object that owns the event stream.
@@ -335,21 +342,33 @@ pub const GEOMETRY_BODY_LEN: usize = 36;
 pub const GEOMETRY_MESSAGE_LEN: usize = HEADER_LEN + GEOMETRY_BODY_LEN;
 /// Word 8 of a geometry event: bit 0 means words 6 and 7 carry a fold region.
 pub const GEOMETRY_FLAG_FOLD: u32 = 1;
+/// A resolved layout patch: 23 words plus the shared header.
+pub const EVENT_LAYOUT_PATCH: u16 = 6;
+pub const LAYOUT_PATCH_MAGIC: u32 = 0x4f50_4c31;
+pub const LAYOUT_PATCH_BODY_LEN: usize = 23 * 4;
+pub const LAYOUT_PATCH_MESSAGE_LEN: usize = HEADER_LEN + LAYOUT_PATCH_BODY_LEN;
+
+const LAYOUT_PATCH_WORD_COUNT: usize = LAYOUT_PATCH_BODY_LEN / 4;
 
 const BAD_EVENT_BODY: &str = "Wayland event body does not match its opcode";
 const BAD_FOCUS: &str = "Wayland focus event argument is invalid";
 const BAD_BATCH: &str = "Wayland event batch exceeds the event limit";
 const BAD_TRAILING: &str = "Wayland event batch ends with a partial message";
 const BAD_GEOMETRY: &str = "Wayland display geometry event is invalid";
+const BAD_LAYOUT_PATCH: &str = "Wayland layout patch event is invalid";
 
 impl WireEvent {
-    /// Two-word input/resize messages need no padding; geometry uses a
-    /// nine-word body with its own encoder.
+    /// Two-word input/resize messages need no padding; geometry and its layout
+    /// patch use their own fixed-word encoders.
     pub fn encode(self) -> Result<Vec<u8>, AdapterError> {
         let (opcode, first, second) = match self {
             WireEvent::Geometry(geometry) => {
                 return encode_geometry_event(geometry)
                     .map_err(|_| AdapterError::Backend(BAD_GEOMETRY));
+            }
+            WireEvent::LayoutPatch(patch) => {
+                return encode_layout_patch_event(patch)
+                    .map_err(|_| AdapterError::Backend(BAD_LAYOUT_PATCH));
             }
             WireEvent::Resize { width, height } => {
                 (EVENT_RESIZE, width.to_ne_bytes(), height.to_ne_bytes())
@@ -414,14 +433,9 @@ pub fn encode_geometry_event(geometry: DisplayGeometry) -> Result<Vec<u8>, Geome
         .map_err(|_| GeometryError::InvalidWireLength)
 }
 
-fn decode_geometry_body(body: &[u8]) -> Result<DisplayGeometry, GeometryError> {
-    if body.len() != GEOMETRY_BODY_LEN {
-        return Err(GeometryError::InvalidWireLength);
-    }
-    let mut words = [0u32; GEOMETRY_WORD_COUNT];
-    for (word, chunk) in words.iter_mut().zip(body.chunks_exact(4)) {
-        *word = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-    }
+fn geometry_from_words(
+    words: [u32; GEOMETRY_WORD_COUNT],
+) -> Result<DisplayGeometry, GeometryError> {
     let flags = words[8];
     if flags & !GEOMETRY_FLAG_FOLD != 0 {
         return Err(GeometryError::InvalidWireFlags);
@@ -463,6 +477,17 @@ fn decode_geometry_body(body: &[u8]) -> Result<DisplayGeometry, GeometryError> {
     DisplayGeometry::new(words[0], words[1], words[2], posture, role, fold)
 }
 
+fn decode_geometry_body(body: &[u8]) -> Result<DisplayGeometry, GeometryError> {
+    if body.len() != GEOMETRY_BODY_LEN {
+        return Err(GeometryError::InvalidWireLength);
+    }
+    let mut words = [0u32; GEOMETRY_WORD_COUNT];
+    for (word, chunk) in words.iter_mut().zip(body.chunks_exact(4)) {
+        *word = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    }
+    geometry_from_words(words)
+}
+
 /// Decode only a geometry event, preserving the concrete typed reason for a
 /// malformed header, object, opcode, flags, length or field. A partial message
 /// is `Ok(None)`.
@@ -483,6 +508,142 @@ pub fn decode_geometry_event(
     Ok(Some((decode_geometry_body(body)?, size)))
 }
 
+const PATCH_GEOMETRY_START: usize = 1;
+const PATCH_DECISION_START: usize = PATCH_GEOMETRY_START + GEOMETRY_WORD_COUNT;
+const PATCH_AVOID_START: usize = PATCH_DECISION_START + 4;
+const PATCH_CONTENT_START: usize = PATCH_AVOID_START + 5;
+
+fn tier_tag(tier: LayoutTier) -> u32 {
+    match tier {
+        LayoutTier::Compact => 0,
+        LayoutTier::Medium => 1,
+        LayoutTier::Expanded => 2,
+        LayoutTier::Wide => 3,
+        LayoutTier::Ultra => 4,
+    }
+}
+
+fn tier_from_tag(tag: u32) -> Result<LayoutTier, GeometryError> {
+    Ok(match tag {
+        0 => LayoutTier::Compact,
+        1 => LayoutTier::Medium,
+        2 => LayoutTier::Expanded,
+        3 => LayoutTier::Wide,
+        4 => LayoutTier::Ultra,
+        _ => return Err(GeometryError::InvalidLayoutPatch),
+    })
+}
+
+fn layout_patch_words(patch: LayoutPatch) -> [u32; LAYOUT_PATCH_WORD_COUNT] {
+    let geometry = geometry_words(patch.geometry);
+    let (fold_flag, fold_x, fold_y, fold_width, fold_height) = match patch.decision.avoid_fold {
+        Some(rect) => (1u32, rect.x, rect.y, rect.width, rect.height),
+        None => (0u32, 0, 0, 0, 0),
+    };
+    let mut words = [0u32; LAYOUT_PATCH_WORD_COUNT];
+    words[0] = LAYOUT_PATCH_MAGIC;
+    words[PATCH_GEOMETRY_START..PATCH_DECISION_START].copy_from_slice(&geometry);
+    words[PATCH_DECISION_START] = tier_tag(patch.decision.tier);
+    words[PATCH_DECISION_START + 1] = patch.decision.columns;
+    words[PATCH_DECISION_START + 2] = patch.decision.gutter;
+    words[PATCH_DECISION_START + 3] = patch.decision.split_ratio;
+    words[PATCH_AVOID_START] = fold_flag;
+    words[PATCH_AVOID_START + 1] = fold_x;
+    words[PATCH_AVOID_START + 2] = fold_y;
+    words[PATCH_AVOID_START + 3] = fold_width;
+    words[PATCH_AVOID_START + 4] = fold_height;
+    words[PATCH_CONTENT_START] = patch.content.x;
+    words[PATCH_CONTENT_START + 1] = patch.content.y;
+    words[PATCH_CONTENT_START + 2] = patch.content.width;
+    words[PATCH_CONTENT_START + 3] = patch.content.height;
+    words
+}
+
+/// Encode opcode 6 with 23 native-endian words: magic, nine geometry words,
+/// tier/columns/gutter/split ratio, fold-rectangle fields and content rect.
+pub fn encode_layout_patch_event(patch: LayoutPatch) -> Result<Vec<u8>, GeometryError> {
+    patch.validate()?;
+    let mut body = Vec::with_capacity(LAYOUT_PATCH_BODY_LEN);
+    for word in layout_patch_words(patch) {
+        body.extend_from_slice(&word.to_ne_bytes());
+    }
+    encode_message(EVENT_OBJECT_ID, EVENT_LAYOUT_PATCH, &body)
+        .map_err(|_| GeometryError::InvalidWireLength)
+}
+
+fn decode_layout_patch_body(body: &[u8]) -> Result<LayoutPatch, GeometryError> {
+    if body.len() != LAYOUT_PATCH_BODY_LEN {
+        return Err(GeometryError::InvalidWireLength);
+    }
+    let mut words = [0u32; LAYOUT_PATCH_WORD_COUNT];
+    for (word, chunk) in words.iter_mut().zip(body.chunks_exact(4)) {
+        *word = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    }
+    if words[0] != LAYOUT_PATCH_MAGIC {
+        return Err(GeometryError::InvalidLayoutPatch);
+    }
+    let mut geometry = [0u32; GEOMETRY_WORD_COUNT];
+    geometry.copy_from_slice(&words[PATCH_GEOMETRY_START..PATCH_DECISION_START]);
+    let geometry = geometry_from_words(geometry)?;
+    let avoid_fold = match words[PATCH_AVOID_START] {
+        0 if words[PATCH_AVOID_START + 1..PATCH_CONTENT_START]
+            .iter()
+            .all(|&word| word == 0) =>
+        {
+            None
+        }
+        0 => return Err(GeometryError::InvalidLayoutPatch),
+        1 => Some(Rect {
+            x: words[PATCH_AVOID_START + 1],
+            y: words[PATCH_AVOID_START + 2],
+            width: words[PATCH_AVOID_START + 3],
+            height: words[PATCH_AVOID_START + 4],
+        }),
+        _ => return Err(GeometryError::InvalidLayoutPatch),
+    };
+    let patch = LayoutPatch {
+        geometry,
+        frame: Size {
+            width: geometry.width,
+            height: geometry.height,
+        },
+        content: Rect {
+            x: words[PATCH_CONTENT_START],
+            y: words[PATCH_CONTENT_START + 1],
+            width: words[PATCH_CONTENT_START + 2],
+            height: words[PATCH_CONTENT_START + 3],
+        },
+        decision: LayoutDecision {
+            tier: tier_from_tag(words[PATCH_DECISION_START])?,
+            columns: words[PATCH_DECISION_START + 1],
+            gutter: words[PATCH_DECISION_START + 2],
+            avoid_fold,
+            split_ratio: words[PATCH_DECISION_START + 3],
+        },
+    };
+    patch.validate()?;
+    Ok(patch)
+}
+
+/// Decode only a layout patch event, preserving the concrete typed reason for
+/// a malformed header, object, opcode or non-canonical payload.
+pub fn decode_layout_patch_event(
+    bytes: &[u8],
+) -> Result<Option<(LayoutPatch, usize)>, GeometryError> {
+    let Some((parsed, body, size)) =
+        next_event(bytes).map_err(|_| GeometryError::InvalidWireHeader)?
+    else {
+        return Ok(None);
+    };
+    if parsed.object_id != EVENT_OBJECT_ID {
+        return Err(GeometryError::InvalidWireObject);
+    }
+    if parsed.opcode != EVENT_LAYOUT_PATCH {
+        return Err(GeometryError::InvalidWireOpcode);
+    }
+    Ok(Some((decode_layout_patch_body(body)?, size)))
+}
+
 /// Take the first complete event from a stream. A partial message is
 /// `Ok(None)`; a malformed one is a concrete `Err`, never a panic.
 pub fn decode_event(bytes: &[u8]) -> Result<Option<(WireEvent, usize)>, AdapterError> {
@@ -496,6 +657,11 @@ pub fn decode_event(bytes: &[u8]) -> Result<Option<(WireEvent, usize)>, AdapterE
         let geometry =
             decode_geometry_body(body).map_err(|_| AdapterError::Backend(BAD_GEOMETRY))?;
         return Ok(Some((WireEvent::Geometry(geometry), size)));
+    }
+    if parsed.opcode == EVENT_LAYOUT_PATCH {
+        let patch =
+            decode_layout_patch_body(body).map_err(|_| AdapterError::Backend(BAD_LAYOUT_PATCH))?;
+        return Ok(Some((WireEvent::LayoutPatch(patch), size)));
     }
     if body.len() != 8 {
         return Err(AdapterError::Backend(BAD_EVENT_BODY));

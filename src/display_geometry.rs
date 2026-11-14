@@ -140,6 +140,7 @@ pub enum GeometryError {
     InvalidPostureTag,
     InvalidRoleTag,
     UnexpectedHingeAngle,
+    InvalidLayoutPatch,
 }
 
 impl fmt::Display for GeometryError {
@@ -158,6 +159,7 @@ impl fmt::Display for GeometryError {
             Self::InvalidPostureTag => "geometry event posture tag is unknown",
             Self::InvalidRoleTag => "geometry event window role tag is unknown",
             Self::UnexpectedHingeAngle => "hinge angle is set without a hinge posture",
+            Self::InvalidLayoutPatch => "layout patch does not match its geometry",
         };
         f.write_str(reason)
     }
