@@ -87,7 +87,9 @@ fn verify_window(args: &[String]) -> i32 {
         .position(|arg| arg == "--out")
         .and_then(|index| args.get(index + 1))
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("opurom-window.png"));
+        // Default into the system temp directory: a verification run must never
+        // leave artifacts in the working tree it was launched from.
+        .unwrap_or_else(|| std::env::temp_dir().join("opurom-window.png"));
 
     // The reference frame comes from the software renderer, either from a
     // pre-rendered PPM or by running the sibling renderer binary.
