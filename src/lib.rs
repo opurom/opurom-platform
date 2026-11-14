@@ -1,18 +1,29 @@
 //! Opurom platform adapter ABI 0.1.0 (normative: `the framework adapter contract`).
 //!
-//! Zero dependencies. `Headless` is the 0.1.0 reference adapter and conformance
-//! oracle; capability adds `Terminal` as a second fully implemented, Verified host adapter.
-//! Both are thin host adapters demonstrating the platform boundary, not GPU
-//! backends. OS-native / mini-program / web adapters, native widget embedding and
-//! Metal/Vulkan/ANGLE GPU presentation remain later rounds (capability+).
+//! `Headless` is the 0.1.0 reference adapter and conformance oracle; capability adds
+//! `Terminal`. capability adds the macOS-only `MacHost` with a real AppKit/CAMetalLayer
+//! host descriptor, a headlessly verifiable PNG path and `WindowSet`. The
+//! AppKit/CoreGraphics dependencies are target-scoped, so Linux CI builds the
+//! ABI and the cross-platform hosts without AppKit. OS-native adapters for
+//! Windows/Linux/Harmony, native widget trees and GPU presentation remain capability+.
 
 use std::fmt;
 
 mod headless;
+mod png;
 mod terminal;
+mod window_set;
+
+#[cfg(target_os = "macos")]
+mod appkit;
 
 pub use headless::Headless;
+pub use png::frame_to_png;
 pub use terminal::Terminal;
+pub use window_set::WindowSet;
+
+#[cfg(target_os = "macos")]
+pub use appkit::{MacHost, MacHostDescriptor, MacWindow};
 
 /// Logical viewport size in pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,9 +158,31 @@ pub const TERMINAL_SPEC: PlatformSpec = PlatformSpec {
     status: Status::Verified,
 };
 
+/// Non-macOS fallback for the macOS-only PNG path. It is an error value, never
+/// a fabricated CoreGraphics result or a fake success.
+pub const APPKIT_UNAVAILABLE: &str = "AppKitUnavailable: frame_to_png requires macOS";
+
+/// capability Verified host on macOS. `native_embed` marks the real `NSView` /
+/// `CAMetalLayer` native host surface, not an embedded widget tree; `gpu` stays
+/// false because `present` writes a PNG instead of drawing to a Metal drawable.
+/// `dpi_scale` is a documented 1.0 fallback; `appkit_capabilities()` replaces it
+/// with `NSScreen.backingScaleFactor` when that value is available.
+pub const APPKIT_SPEC: PlatformSpec = PlatformSpec {
+    name: "appkit",
+    emitter: "appkit",
+    capabilities: Capabilities {
+        gpu: false,
+        native_embed: true,
+        multi_window: true,
+        lifecycle: false,
+        dpi_scale: 1.0,
+    },
+    status: Status::Verified,
+};
+
 const fn caps(multi_window: bool, lifecycle: bool, dpi_scale: f32) -> Capabilities {
-    // GPU presentation and native widget embedding are later rounds (capability+), false
-    // everywhere; the headless and terminal hosts never claim them either.
+    // Target rows and the headless/terminal hosts claim neither GPU presentation
+    // nor a native host surface; the AppKit host sets its own capabilities above.
     Capabilities {
         gpu: false,
         native_embed: false,
@@ -264,17 +297,38 @@ pub fn all_platforms() -> Vec<PlatformSpec> {
     all
 }
 
-/// Fully implemented, `Verified` host adapters (run on any OS, not target emitters).
-/// capability adds `terminal` alongside the 0.1.0 `headless` oracle; listed by `--hosts`.
-pub fn host_platforms() -> Vec<PlatformSpec> {
-    vec![HEADLESS_SPEC.clone(), TERMINAL_SPEC.clone()]
+/// AppKit capabilities with the real `NSScreen.backingScaleFactor` when the
+/// main-thread screen query is available; the documented fallback is 1.0.
+#[cfg(target_os = "macos")]
+pub fn appkit_capabilities() -> Capabilities {
+    let mut capabilities = APPKIT_SPEC.capabilities;
+    capabilities.dpi_scale = appkit::screen_dpi_scale();
+    capabilities
 }
 
-/// Query any known platform by name: the 14 targets, the headless oracle and the
-/// capability terminal host.
+/// The capability AppKit host row with its measured/fallback DPI scale.
+#[cfg(target_os = "macos")]
+pub fn appkit_spec() -> PlatformSpec {
+    let mut contract = APPKIT_SPEC.clone();
+    contract.capabilities = appkit_capabilities();
+    contract
+}
+
+/// Fully implemented, `Verified` host adapters (not target emitters). capability adds
+/// `terminal`; capability adds `appkit` on macOS only. Listed by `--hosts`.
+pub fn host_platforms() -> Vec<PlatformSpec> {
+    let mut hosts = vec![HEADLESS_SPEC.clone(), TERMINAL_SPEC.clone()];
+    #[cfg(target_os = "macos")]
+    hosts.push(appkit_spec());
+    hosts
+}
+
+/// Query any known platform by name: the 14 targets, the headless oracle, the
+/// capability terminal host and (on macOS) the capability AppKit host.
 pub fn spec_by_name(name: &str) -> Option<PlatformSpec> {
-    all_platforms()
-        .into_iter()
-        .chain(std::iter::once(TERMINAL_SPEC.clone()))
-        .find(|contract| contract.name == name)
+    let mut known = all_platforms();
+    known.push(TERMINAL_SPEC.clone());
+    #[cfg(target_os = "macos")]
+    known.push(appkit_spec());
+    known.into_iter().find(|contract| contract.name == name)
 }
