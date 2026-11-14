@@ -1,7 +1,7 @@
 # opurom-platform - Platform Adapter ABI 0.1.0 + GPU presentation
 
 Independent Rust crate implementing the normative
-[the framework implementation](../opurom-examples/golden/the framework implementation). The ABI, registry,
+[the framework implementation](the framework implementation). The ABI, registry,
 `Headless`, `Terminal` and `WindowSet` remain pure Rust. PNG encoding uses the
 cached `png` crate; macOS AppKit/CoreGraphics dependencies are target-scoped,
 so Linux CI builds the crate without AppKit. The macOS host adds a real `NSApplication`
