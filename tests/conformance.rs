@@ -1,7 +1,7 @@
 use opurom_platform::{
-    all_platforms, host_platforms, registry, spec_by_name, AdapterError, Capabilities, FrameView,
-    Headless, InputEvent, Lifecycle, PlatformAdapter, Size, Status, Terminal, WindowSet,
-    HEADLESS_SPEC, TERMINAL_SPEC,
+    all_platforms, host_platforms, known_platforms, platforms_with, registry, spec_by_name,
+    AdapterError, Capabilities, Capability, FrameView, Headless, InputEvent, Lifecycle,
+    PlatformAdapter, Size, Status, Terminal, WindowSet, HEADLESS_SPEC, TERMINAL_SPEC,
 };
 
 /// The 14 target names required by the framework implementation.
@@ -585,4 +585,101 @@ fn window_set_resize_all_updates_every_viewport_and_queues_one_event_each() {
         windows.viewports(),
         vec![size(7, 5), size(4, 4), size(7, 5)]
     );
+}
+
+#[test]
+fn capability_query_partitions_the_known_platform_set() {
+    let known = known_platforms();
+    let names: Vec<&str> = known.iter().map(|contract| contract.name).collect();
+    let unique: std::collections::BTreeSet<&str> = names.iter().copied().collect();
+    assert_eq!(
+        unique.len(),
+        names.len(),
+        "every known platform name is unique"
+    );
+    assert!(
+        known.len() > all_platforms().len(),
+        "the known set adds the terminal and Wayland hosts"
+    );
+    for name in ["headless", "terminal", "wayland", "linux"] {
+        assert!(names.contains(&name), "{name} is a known platform");
+    }
+    for contract in &known {
+        assert_eq!(
+            spec_by_name(contract.name).map(|found| found.name),
+            Some(contract.name),
+            "each known platform resolves by name"
+        );
+    }
+
+    for capability in [
+        Capability::Gpu,
+        Capability::NativeEmbed,
+        Capability::MultiWindow,
+        Capability::Lifecycle,
+    ] {
+        let expected: Vec<&str> = known
+            .iter()
+            .filter(|contract| contract.supports(capability))
+            .map(|contract| contract.name)
+            .collect();
+        let actual: Vec<&str> = platforms_with(capability)
+            .iter()
+            .map(|contract| contract.name)
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "the query matches the flags for {capability:?}"
+        );
+    }
+}
+
+#[test]
+fn capability_query_reflects_the_frozen_capability_flags() {
+    assert!(
+        platforms_with(Capability::Gpu).is_empty(),
+        "no row advertises GPU presentation"
+    );
+
+    let multi_window: Vec<&str> = platforms_with(Capability::MultiWindow)
+        .iter()
+        .map(|contract| contract.name)
+        .collect();
+    for name in ["harmony-pc", "windows", "macos", "linux"] {
+        assert!(
+            multi_window.contains(&name),
+            "{name} advertises multi_window"
+        );
+    }
+
+    let lifecycle: Vec<&str> = platforms_with(Capability::Lifecycle)
+        .iter()
+        .map(|contract| contract.name)
+        .collect();
+    assert!(
+        lifecycle.contains(&"wechat"),
+        "a scaffold reports lifecycle events"
+    );
+    assert!(
+        !lifecycle.contains(&"headless"),
+        "the oracle reports no lifecycle events"
+    );
+}
+
+#[test]
+fn capability_supports_reads_each_boolean_flag() {
+    let mut contract = spec_by_name("android").unwrap();
+    assert!(contract.supports(Capability::Lifecycle));
+    assert!(!contract.supports(Capability::MultiWindow));
+    assert!(!contract.supports(Capability::Gpu));
+    assert!(!contract.supports(Capability::NativeEmbed));
+
+    contract.capabilities.multi_window = true;
+    contract.capabilities.gpu = true;
+    contract.capabilities.native_embed = true;
+    contract.capabilities.lifecycle = false;
+    assert!(contract.supports(Capability::MultiWindow));
+    assert!(contract.supports(Capability::Gpu));
+    assert!(contract.supports(Capability::NativeEmbed));
+    assert!(!contract.supports(Capability::Lifecycle));
 }
