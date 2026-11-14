@@ -110,6 +110,7 @@ fn a_missing_gpu_dylib_is_a_concrete_skip() {
     assert!(!stdout.contains("PASS"), "never a fake PASS: {stdout}");
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn a_missing_software_renderer_is_a_concrete_skip() {
     let (stdout, code) = run(
@@ -122,6 +123,7 @@ fn a_missing_software_renderer_is_a_concrete_skip() {
     assert!(!stdout.contains("PASS"), "never a fake PASS: {stdout}");
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn a_missing_animated_ir_is_a_concrete_skip() {
     let (stdout, code) = run(
@@ -285,4 +287,19 @@ fn the_captured_sequence_matches_the_software_sequence_on_screen() {
     } else {
         skip("the sibling renderer or fixture is absent; the CLI report stands alone");
     }
+}
+
+/// Non-macOS hosts cannot present Metal drawables: the CLI must still report a
+/// concrete SKIP with exit 0 instead of a fake PASS.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn a_non_macos_host_is_a_concrete_skip() {
+    let (stdout, code) = run(&["--out", "/tmp/opurom-loop-other-host.png"], &[]);
+    assert_eq!(code, 0, "a platform SKIP must exit 0: {stdout}");
+    assert!(stdout.starts_with("SKIP"), "expected a SKIP: {stdout}");
+    assert!(
+        stdout.contains("macOS"),
+        "a SKIP names its reason: {stdout}"
+    );
+    assert!(!stdout.contains("PASS"), "never a fake PASS: {stdout}");
 }
