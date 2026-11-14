@@ -40,6 +40,13 @@ impl Terminal {
         Self::new(DEFAULT_WIDTH, DEFAULT_HEIGHT)
     }
 
+    /// Move the viewport to `size` and queue one `Resize` event, so the host
+    /// reports the new size before the event is drained.
+    pub fn resize(&mut self, size: Size) {
+        self.viewport = size;
+        self.events.push_back(InputEvent::Resize { size });
+    }
+
     /// Queue a parsed key event; `poll_event()` drains FIFO.
     pub fn push_key(&mut self, code: u32, pressed: bool) {
         self.events.push_back(InputEvent::Key { code, pressed });
@@ -80,7 +87,13 @@ impl PlatformAdapter for Terminal {
     }
 
     fn poll_event(&mut self) -> Option<InputEvent> {
-        self.events.pop_front()
+        let event = self.events.pop_front()?;
+        // A queued resize from outside the host moves the viewport on the way
+        // out, so `viewport()` agrees with the event whatever queued it.
+        if let InputEvent::Resize { size } = &event {
+            self.viewport = *size;
+        }
+        Some(event)
     }
 
     fn present(&mut self, frame: FrameView<'_>) -> Result<(), AdapterError> {

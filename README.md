@@ -135,7 +135,10 @@ truecolor ANSI half-block output. It is a thin host adapter, not an OS window or
 GPU backend. `present(FrameView)` emits one `U+2580` per column and two pixel
 rows per character row; `last_output()` / `render_text()` expose the exact ANSI
 bytes. `push_key`, `push_input` and `push_event` queue normalized input;
-`poll_event()` drains FIFO. Its capabilities are all false with `dpi_scale: 1.0`.
+`poll_event()` drains FIFO. `resize(size)` moves the viewport and queues one
+`Resize` event, and draining a queued `Resize` moves the viewport the same way,
+so `viewport()` always reports the size the event stream carries. Its
+capabilities are all false with `dpi_scale: 1.0`.
 
 ### AppKit host adapter (Verified on macOS)
 
@@ -578,10 +581,10 @@ From the umbrella root the built CLI can be invoked directly as
 `./opurom-platform/target/debug/opurom-platform --verify-gpu-presentation --out /tmp/opurom-gpu-presentation.png`;
 the renderer, IR and GPU dylib paths are absolute and CWD-independent.
 
-`cargo test --offline` runs **95 tests** on macOS: 40 library unit tests
+`cargo test --offline` runs **101 tests** on macOS: 43 library unit tests
 (including four pure animation-loop checks and fifteen pure Wayland wire checks),
 two accessibility tests, eleven
-AppKit host tests, two CLI tests, twenty-two conformance tests, seven
+AppKit host tests, two CLI tests, twenty-five conformance tests, seven
 animation-loop integration tests, four GPU presentation integration tests
 (presentation-on-screen, forced SKIP, missing-dylib SKIP and status honesty),
 four native-window tests and three Wayland integration tests
