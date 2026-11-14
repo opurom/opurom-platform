@@ -6,6 +6,8 @@
 //! with the object ID, then a word whose upper 16 bits are the total message
 //! size (header included) and whose lower 16 bits are the opcode. Strings carry
 //! a length word, their NUL-terminated bytes and zero padding to a word boundary.
+//! Native host events are framed with the same layout so a recorded batch can
+//! be replayed without a live window.
 
 use crate::AdapterError;
 
@@ -301,6 +303,100 @@ pub fn encode_create_buffer(
         body.extend_from_slice(&value.to_ne_bytes());
     }
     encode_message(pool_id, WL_SHM_POOL_CREATE_BUFFER, &body)
+}
+
+/// Host-independent framing for the native hosts' normalized events. Win32
+/// packs a resize and signed 16-bit pointer coordinates into `lparam`; X11
+/// reports them as `c_int`. Both fit the 32-bit fields below, so the same
+/// message bytes are produced on every host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WireEvent {
+    Resize { width: u32, height: u32 },
+    Press { x: i32, y: i32 },
+    Release { x: i32, y: i32 },
+    Move { x: i32, y: i32 },
+}
+
+/// The server-created object that owns the event stream.
+pub const EVENT_OBJECT_ID: u32 = SERVER_ID_START;
+pub const EVENT_RESIZE: u16 = 0;
+pub const EVENT_PRESS: u16 = 1;
+pub const EVENT_RELEASE: u16 = 2;
+pub const EVENT_MOVE: u16 = 3;
+
+const BAD_EVENT_BODY: &str = "Wayland event body does not match its opcode";
+const BAD_BATCH: &str = "Wayland event batch exceeds the event limit";
+const BAD_TRAILING: &str = "Wayland event batch ends with a partial message";
+
+impl WireEvent {
+    /// One message with a two-word body; no padding is needed.
+    pub fn encode(self) -> Result<Vec<u8>, AdapterError> {
+        let (opcode, first, second) = match self {
+            WireEvent::Resize { width, height } => {
+                (EVENT_RESIZE, width.to_ne_bytes(), height.to_ne_bytes())
+            }
+            WireEvent::Press { x, y } => (EVENT_PRESS, x.to_ne_bytes(), y.to_ne_bytes()),
+            WireEvent::Release { x, y } => (EVENT_RELEASE, x.to_ne_bytes(), y.to_ne_bytes()),
+            WireEvent::Move { x, y } => (EVENT_MOVE, x.to_ne_bytes(), y.to_ne_bytes()),
+        };
+        let mut body = Vec::with_capacity(8);
+        body.extend_from_slice(&first);
+        body.extend_from_slice(&second);
+        encode_message(EVENT_OBJECT_ID, opcode, &body)
+    }
+}
+
+/// Take the first complete event from a stream. A partial message is
+/// `Ok(None)`; a malformed one is a concrete `Err`, never a panic.
+pub fn decode_event(bytes: &[u8]) -> Result<Option<(WireEvent, usize)>, AdapterError> {
+    let Some((parsed, body, size)) = next_event(bytes)? else {
+        return Ok(None);
+    };
+    if parsed.object_id != EVENT_OBJECT_ID || body.len() != 8 {
+        return Err(AdapterError::Backend(BAD_EVENT_BODY));
+    }
+    let first = [body[0], body[1], body[2], body[3]];
+    let second = [body[4], body[5], body[6], body[7]];
+    let event = match parsed.opcode {
+        EVENT_RESIZE => WireEvent::Resize {
+            width: u32::from_ne_bytes(first),
+            height: u32::from_ne_bytes(second),
+        },
+        EVENT_PRESS => WireEvent::Press {
+            x: i32::from_ne_bytes(first),
+            y: i32::from_ne_bytes(second),
+        },
+        EVENT_RELEASE => WireEvent::Release {
+            x: i32::from_ne_bytes(first),
+            y: i32::from_ne_bytes(second),
+        },
+        EVENT_MOVE => WireEvent::Move {
+            x: i32::from_ne_bytes(first),
+            y: i32::from_ne_bytes(second),
+        },
+        _ => return Err(AdapterError::Backend(BAD_EVENT_BODY)),
+    };
+    Ok(Some((event, size)))
+}
+
+/// Decode a whole batch, refusing more than `limit` events. A batch must end
+/// on a message boundary: trailing partial bytes are an error, not a short read.
+pub fn decode_batch(bytes: &[u8], limit: usize) -> Result<Vec<WireEvent>, AdapterError> {
+    let mut events = Vec::new();
+    let mut offset = 0usize;
+    loop {
+        match decode_event(&bytes[offset..])? {
+            Some((event, size)) => {
+                if events.len() >= limit {
+                    return Err(AdapterError::Backend(BAD_BATCH));
+                }
+                events.push(event);
+                offset += size;
+            }
+            None if offset == bytes.len() => return Ok(events),
+            None => return Err(AdapterError::Backend(BAD_TRAILING)),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -608,6 +704,163 @@ mod tests {
         assert!(
             !host_platforms().iter().any(|host| host.name == "wayland"),
             "a Planned host is not a Verified host"
+        );
+    }
+
+    /// Fixed tables only: the same cases run on every host, with no randomness.
+    const RESIZE_WIDTHS: [u32; 5] = [0, 1, 320, 1600, 4096];
+    const COORDS: [i32; 7] = [
+        i32::MIN,
+        i16::MIN as i32,
+        -1,
+        0,
+        1,
+        i16::MAX as i32,
+        i32::MAX,
+    ];
+
+    fn event_cases() -> Vec<WireEvent> {
+        let mut cases = Vec::new();
+        for (index, &width) in RESIZE_WIDTHS.iter().enumerate() {
+            // Pair each width with the next one so a width/height swap fails.
+            cases.push(WireEvent::Resize {
+                width,
+                height: RESIZE_WIDTHS[(index + 1) % RESIZE_WIDTHS.len()],
+            });
+        }
+        for (index, &x) in COORDS.iter().enumerate() {
+            let y = COORDS[(index + 1) % COORDS.len()];
+            cases.push(WireEvent::Press { x, y });
+            cases.push(WireEvent::Release { x, y });
+            cases.push(WireEvent::Move { x, y });
+        }
+        cases
+    }
+
+    fn encode_cases(cases: &[WireEvent]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for &event in cases {
+            bytes.extend_from_slice(&event.encode().unwrap());
+        }
+        bytes
+    }
+
+    #[test]
+    fn resize_and_input_events_round_trip_over_fixed_tables() {
+        for &event in &event_cases() {
+            let bytes = event.encode().unwrap();
+            assert_eq!(bytes.len(), 16, "two words plus the 8-byte header");
+            let (decoded, used) = decode_event(&bytes).unwrap().unwrap();
+            assert_eq!(decoded, event, "{event:?} did not round-trip");
+            assert_eq!(used, bytes.len(), "the whole message is consumed");
+        }
+        // One concrete layout pins the native-endian word order.
+        assert_eq!(
+            WireEvent::Resize {
+                width: 320,
+                height: 1600,
+            }
+            .encode()
+            .unwrap(),
+            native(
+                &[
+                    0x00, 0x00, 0x00, 0xff, 0x00, 0x00, 0x10, 0x00, 0x40, 0x01, 0x00, 0x00, 0x40,
+                    0x06, 0x00, 0x00,
+                ],
+                &[
+                    0xff, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x01, 0x40, 0x00,
+                    0x00, 0x06, 0x40,
+                ],
+            ),
+        );
+    }
+
+    #[test]
+    fn multi_event_batches_round_trip_and_bound_the_decoder() {
+        let cases = event_cases();
+        let bytes = encode_cases(&cases);
+        assert_eq!(bytes.len(), cases.len() * 16);
+        assert_eq!(decode_batch(&bytes, cases.len()), Ok(cases.clone()));
+        assert_eq!(decode_batch(&[], 0), Ok(Vec::new()));
+        // One event over the limit is rejected with a named, clear error.
+        let err = decode_batch(&bytes, cases.len() - 1).unwrap_err();
+        assert_eq!(err, AdapterError::Backend(BAD_BATCH));
+        assert!(
+            err.to_string()
+                .contains("event batch exceeds the event limit"),
+            "{err} is not a clear oversized-batch error"
+        );
+        assert_eq!(
+            decode_batch(&bytes, 0),
+            Err(AdapterError::Backend(BAD_BATCH))
+        );
+    }
+
+    #[test]
+    fn truncated_buffers_never_yield_a_partial_event() {
+        let cases = event_cases();
+        let bytes = encode_cases(&cases);
+        for cut in 0..bytes.len() {
+            let prefix = &bytes[..cut];
+            match decode_event(prefix) {
+                Ok(Some((event, used))) => {
+                    assert!(cut >= 16, "the first message must be complete");
+                    assert_eq!(event, cases[0]);
+                    assert_eq!(used, 16);
+                }
+                Ok(None) => assert!(cut < 16, "a complete first message must decode"),
+                Err(_) => {}
+            }
+            if cut % 16 == 0 {
+                assert_eq!(
+                    decode_batch(prefix, cases.len()),
+                    Ok(cases[..cut / 16].to_vec()),
+                    "a batch cut on a message boundary still round-trips"
+                );
+            } else {
+                assert_eq!(
+                    decode_batch(prefix, cases.len()),
+                    Err(AdapterError::Backend(BAD_TRAILING)),
+                    "a trailing partial message is rejected"
+                );
+            }
+        }
+        // Truncated string arguments are rejected too, never indexed past end.
+        let string = encode_string("wl_compositor").unwrap();
+        for cut in 0..string.len() {
+            assert!(decode_string(&string[..cut]).is_err(), "cut {cut}");
+        }
+    }
+
+    #[test]
+    fn malformed_event_headers_and_bodies_are_concrete_errors() {
+        let good = WireEvent::Move { x: -1, y: 1 }.encode().unwrap();
+        let broken = [
+            header(EVENT_OBJECT_ID, EVENT_RESIZE, 0), // size below the header
+            header(EVENT_OBJECT_ID, EVENT_RESIZE, 9), // not word aligned
+            header(DISPLAY_ID, EVENT_RESIZE, 16),     // wrong object
+            header(EVENT_OBJECT_ID, 99, 16),          // unknown opcode
+        ];
+        for head in broken {
+            let mut bytes = good.clone();
+            bytes[..HEADER_LEN].copy_from_slice(&head);
+            assert!(decode_event(&bytes).is_err(), "{head:?} is rejected");
+            assert!(decode_batch(&bytes, 8).is_err());
+        }
+        // A legal size that cuts the two-word body short.
+        let mut short = good.clone();
+        short[..HEADER_LEN].copy_from_slice(&header(EVENT_OBJECT_ID, EVENT_MOVE, 12));
+        assert_eq!(
+            decode_event(&short),
+            Err(AdapterError::Backend(BAD_EVENT_BODY))
+        );
+        // A claimed size beyond the available bytes is a partial stream.
+        let mut long = good.clone();
+        long[..HEADER_LEN].copy_from_slice(&header(EVENT_OBJECT_ID, EVENT_MOVE, 20));
+        assert_eq!(decode_event(&long), Ok(None));
+        assert_eq!(
+            decode_batch(&long, 8),
+            Err(AdapterError::Backend(BAD_TRAILING))
         );
     }
 }
