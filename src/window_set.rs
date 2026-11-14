@@ -43,6 +43,14 @@ impl WindowSet {
         }
     }
 
+    /// Apply one viewport size to every window. Split-screen and foldable
+    /// transitions recompute all surfaces from the same frame geometry.
+    pub fn resize_all(&mut self, size: Size) {
+        for window in &mut self.windows {
+            window.resize(size);
+        }
+    }
+
     pub fn viewport(&self, index: usize) -> Result<Size, AdapterError> {
         Ok(self.window(index)?.viewport())
     }

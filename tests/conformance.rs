@@ -565,3 +565,24 @@ fn window_set_broadcast_reaches_each_window_in_isolation() {
     );
     assert_eq!(windows.poll_event(1), Ok(None));
 }
+
+#[test]
+fn window_set_resize_all_updates_every_viewport_and_queues_one_event_each() {
+    let mut windows = WindowSet::new([size(2, 1), size(1, 2), size(3, 1)]).unwrap();
+    windows.resize_all(size(7, 5));
+    assert_eq!(windows.viewports(), vec![size(7, 5); 3]);
+
+    for index in 0..windows.len() {
+        assert_eq!(
+            windows.poll_event(index),
+            Ok(Some(InputEvent::Resize { size: size(7, 5) }))
+        );
+        assert_eq!(windows.poll_event(index), Ok(None));
+    }
+
+    windows.resize(1, size(4, 4)).unwrap();
+    assert_eq!(
+        windows.viewports(),
+        vec![size(7, 5), size(4, 4), size(7, 5)]
+    );
+}
