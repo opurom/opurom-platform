@@ -6,7 +6,10 @@
 //! add compile-verified Win32/X11 window hosts, a runtime-loaded Wayland client
 //! adapter with a host-independent wire encoder, and macOS accessibility posting.
 //! The GPU presentation path adds a runtime-loaded Metal drawable presentation for the live
-//! AppKit window. The AppKit/CoreGraphics dependencies are target-scoped, so
+//! AppKit window. `platform_view` adds a deterministic, headless-testable native-view
+//! bridge contract (handle registry, lifecycle, bounds and Z-order) whose input events
+//! and handle frame are shared with the mobile JNI/iOS side.
+//! The AppKit/CoreGraphics dependencies are target-scoped, so
 //! Linux CI builds the ABI and the cross-platform hosts without AppKit.
 
 use std::fmt;
@@ -26,9 +29,9 @@ mod window_set;
 #[cfg(any(target_os = "linux", test))]
 mod x11_pixels;
 // Pure Wayland wire encoding: the handshake, object IDs, the opcode/size
-// header and the wl_shm buffer contract. Verified by `cargo test` on every
-// host, including macOS workstations without a Wayland compositor.
-#[cfg(any(target_os = "linux", test))]
+// header, the wire events and the wl_shm buffer contract. It has no OS
+// dependency, so it is compiled on every host and verified by `cargo test`.
+pub mod platform_view;
 pub mod wayland_wire;
 
 #[cfg(target_os = "macos")]
@@ -54,6 +57,10 @@ pub use gpu_presentation::{
 };
 pub use headless::Headless;
 pub use pixel::{compare_rgba_to_ppm, PixelComparison, CHANNEL_TOLERANCE, MISMATCH_BUDGET_PERCENT};
+pub use platform_view::{
+    PlatformViewError, PlatformViewRegistry, ViewBounds, ViewHandle, ViewLifecycle, ViewState,
+    HANDLE_LEN, HANDLE_MAGIC, SELF_DRAWN_Z_ORDER,
+};
 pub use png::frame_to_png;
 pub use ppm::{read_ppm, PpmImage};
 pub use terminal::Terminal;
