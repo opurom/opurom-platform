@@ -1,6 +1,6 @@
 use opurom_platform::{
-    frame_to_png, host_platforms, parse_a11y_json, post_a11y_tree, registry, FrameView,
-    ANIMATION_FLAG, DEFAULT_A11Y_TREE, SKIP_WINDOW_ENV,
+    frame_to_png, host_platforms, parse_a11y_json, post_a11y_tree, registry, wayland_skip_reason,
+    FrameView, ANIMATION_FLAG, DEFAULT_A11Y_TREE, SKIP_WINDOW_ENV, WAYLAND_DISPLAY_ENV,
 };
 #[cfg(target_os = "macos")]
 use opurom_platform::{
@@ -489,10 +489,59 @@ fn post_a11y(args: &[String]) -> i32 {
     }
 }
 
+/// Report the Wayland wire adapter's live status. Without a compositor the
+/// check prints `SKIP <concrete reason>` and exits 0; it never claims a PASS.
+#[cfg(target_os = "linux")]
+fn verify_wayland() -> i32 {
+    use opurom_platform::WaylandHost;
+
+    let display = std::env::var(WAYLAND_DISPLAY_ENV).ok();
+    if let Some(reason) = wayland_skip_reason(display.as_deref()) {
+        println!("SKIP {reason}");
+        return 0;
+    }
+    let mut host = match WaylandHost::connect() {
+        Ok(host) => host,
+        Err(error) => {
+            println!("SKIP {error}");
+            return 0;
+        }
+    };
+    match host.handshake() {
+        Ok(report) => {
+            println!(
+                "PASS wayland globals={} callback_done={}",
+                report.globals.len(),
+                report.callback_done
+            );
+            0
+        }
+        Err(error) => {
+            println!("SKIP {error}");
+            0
+        }
+    }
+}
+
+/// The Wayland wire encoding is verified on every host; the live compositor
+/// connection is Linux-only, so other hosts report a concrete SKIP.
+#[cfg(not(target_os = "linux"))]
+fn verify_wayland() -> i32 {
+    if let Some(reason) = wayland_skip_reason(std::env::var(WAYLAND_DISPLAY_ENV).ok().as_deref()) {
+        println!("SKIP {reason}");
+    } else {
+        println!("SKIP the live Wayland connection is Linux only");
+    }
+    0
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "--post-a11y") {
         std::process::exit(post_a11y(&args));
+    }
+    if args.iter().any(|arg| arg == "--verify-wayland") {
+        std::process::exit(verify_wayland());
     }
     if let Some(index) = args.iter().position(|arg| arg == "--png") {
         let Some(path) = args.get(index + 1) else {
