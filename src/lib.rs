@@ -9,12 +9,15 @@
 //! AppKit window. `platform_view` adds a deterministic, headless-testable native-view
 //! bridge contract (handle registry, lifecycle, bounds and Z-order) whose input events
 //! and handle frame are shared with the mobile JNI/iOS side.
-//! The AppKit/CoreGraphics dependencies are target-scoped, so
+//! `display_geometry` adds an integer-only fold-aware geometry model, a pure
+//! responsive layout resolver and a framed geometry event for split-screen and
+//! foldable transitions. The AppKit/CoreGraphics dependencies are target-scoped, so
 //! Linux CI builds the ABI and the cross-platform hosts without AppKit.
 
 use std::fmt;
 
 mod a11y;
+pub mod display_geometry;
 pub mod gpu_animation;
 pub mod gpu_presentation;
 mod headless;
@@ -48,6 +51,12 @@ mod x11;
 pub use a11y::{
     focus_order, map_a11y_tree, parse_a11y_json, post_a11y_tree, A11yNode, A11yPost, AxElement,
     AxRole, FocusOrder, DEFAULT_A11Y_TREE, SKIP_A11Y_ENV,
+};
+pub use display_geometry::{
+    resolve_layout, DisplayGeometry, FoldRegion, GeometryError, LayoutDecision, LayoutTier,
+    Posture, Rect, WindowRole, COMPACT_LIMIT, DEFAULT_FOLD_WIDTH, DEFAULT_SPLIT_RATIO, DPI_UNIT,
+    EXPANDED_LIMIT, HINGE_GUTTER_BONUS, MAX_DPI_SCALE, MAX_GUTTER, MAX_HINGE_ANGLE,
+    MAX_SPLIT_RATIO, MEDIUM_LIMIT, MIN_DPI_SCALE, MIN_SPLIT_RATIO, SPLIT_RATIO_UNIT, WIDE_LIMIT,
 };
 pub use gpu_animation::{verify_gpu_animation_loop, ANIMATION_FLAG, ANIMATION_TICKS};
 pub use gpu_presentation::{

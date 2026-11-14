@@ -268,7 +268,8 @@ impl PlatformViewRegistry {
     }
 
     /// Forward a pointer or keyboard-focus event and advance the lifecycle on
-    /// the first input. A disposed view stops receiving input.
+    /// the first input. Resize and geometry events are window state, not input.
+    /// A disposed view stops receiving input.
     pub fn forward_input(
         &mut self,
         handle: ViewHandle,
@@ -283,7 +284,7 @@ impl PlatformViewRegistry {
             WireEvent::Resize {
                 width: _,
                 height: _
-            }
+            } | WireEvent::Geometry(_)
         ) {
             return Err(PlatformViewError::InvalidInput(handle));
         }
@@ -364,6 +365,7 @@ impl Default for PlatformViewRegistry {
 mod tests {
     use super::*;
     use crate::wayland_wire::WireEvent;
+    use crate::{DisplayGeometry, Posture, WindowRole, DPI_UNIT};
 
     fn bounds(width: i32, height: i32) -> ViewBounds {
         ViewBounds::new(0, 0, width, height).unwrap()
@@ -578,6 +580,13 @@ mod tests {
                     height: 10
                 }
             ),
+            Err(PlatformViewError::InvalidInput(handle))
+        );
+        let geometry =
+            DisplayGeometry::new(320, 240, DPI_UNIT, Posture::Flat, WindowRole::Split, None)
+                .unwrap();
+        assert_eq!(
+            registry.forward_input(handle, WireEvent::Geometry(geometry)),
             Err(PlatformViewError::InvalidInput(handle))
         );
         assert_eq!(registry.lifecycle(handle).unwrap(), ViewLifecycle::Resized);
