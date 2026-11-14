@@ -9,11 +9,15 @@
 //! Native host events are framed with the same layout so a recorded batch can
 //! be replayed without a live window. Opcode 5 extends that event stream with
 //! a nine-word display-geometry message; opcode 6 carries its resolved layout
-//! patch.
+//! patch; opcode 7 carries a selected graphics backend capability row.
 
 use crate::display_geometry::{
     DisplayGeometry, FoldRegion, GeometryError, LayoutDecision, LayoutTier, Posture, Rect,
     WindowRole,
+};
+use crate::graphics_backend::{
+    BackendError, Capabilities as GraphicsCapabilities, GraphicsBackend,
+    GraphicsBackendCapabilities, HostOs, SelectionReason,
 };
 use crate::viewport_layout::LayoutPatch;
 use crate::{AdapterError, Size};
@@ -317,16 +321,33 @@ pub fn encode_create_buffer(
 /// reports them as `c_int`. Both fit the 32-bit fields below, so the same
 /// message bytes are produced on every host. `Geometry` carries the larger
 /// nine-word display-geometry payload on the same server-owned object;
-/// `LayoutPatch` carries the deterministic decision derived from it.
+/// `LayoutPatch` carries the deterministic decision derived from it;
+/// `GraphicsBackend` carries a validated backend capability row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WireEvent {
-    Resize { width: u32, height: u32 },
-    Press { x: i32, y: i32 },
-    Release { x: i32, y: i32 },
-    Move { x: i32, y: i32 },
-    Focus { focused: bool },
+    Resize {
+        width: u32,
+        height: u32,
+    },
+    Press {
+        x: i32,
+        y: i32,
+    },
+    Release {
+        x: i32,
+        y: i32,
+    },
+    Move {
+        x: i32,
+        y: i32,
+    },
+    Focus {
+        focused: bool,
+    },
     Geometry(DisplayGeometry),
     LayoutPatch(LayoutPatch),
+    /// Selected graphics backend capability row and its typed reason.
+    GraphicsBackend(GraphicsBackendCapabilities),
 }
 
 /// The server-created object that owns the event stream.
@@ -347,8 +368,14 @@ pub const EVENT_LAYOUT_PATCH: u16 = 6;
 pub const LAYOUT_PATCH_MAGIC: u32 = 0x4f50_4c31;
 pub const LAYOUT_PATCH_BODY_LEN: usize = 23 * 4;
 pub const LAYOUT_PATCH_MESSAGE_LEN: usize = HEADER_LEN + LAYOUT_PATCH_BODY_LEN;
+/// A selected graphics backend capability row: nine words plus the header.
+pub const EVENT_GRAPHICS_BACKEND: u16 = 7;
+pub const GRAPHICS_BACKEND_MAGIC: u32 = 0x4f50_4742;
+pub const GRAPHICS_BACKEND_BODY_LEN: usize = 9 * 4;
+pub const GRAPHICS_BACKEND_MESSAGE_LEN: usize = HEADER_LEN + GRAPHICS_BACKEND_BODY_LEN;
 
 const LAYOUT_PATCH_WORD_COUNT: usize = LAYOUT_PATCH_BODY_LEN / 4;
+const GRAPHICS_BACKEND_WORD_COUNT: usize = GRAPHICS_BACKEND_BODY_LEN / 4;
 
 const BAD_EVENT_BODY: &str = "Wayland event body does not match its opcode";
 const BAD_FOCUS: &str = "Wayland focus event argument is invalid";
@@ -356,6 +383,7 @@ const BAD_BATCH: &str = "Wayland event batch exceeds the event limit";
 const BAD_TRAILING: &str = "Wayland event batch ends with a partial message";
 const BAD_GEOMETRY: &str = "Wayland display geometry event is invalid";
 const BAD_LAYOUT_PATCH: &str = "Wayland layout patch event is invalid";
+const BAD_GRAPHICS_BACKEND: &str = "graphics backend capability event is invalid";
 
 impl WireEvent {
     /// Two-word input/resize messages need no padding; geometry and its layout
@@ -369,6 +397,10 @@ impl WireEvent {
             WireEvent::LayoutPatch(patch) => {
                 return encode_layout_patch_event(patch)
                     .map_err(|_| AdapterError::Backend(BAD_LAYOUT_PATCH));
+            }
+            WireEvent::GraphicsBackend(capabilities) => {
+                return encode_graphics_backend_event(capabilities)
+                    .map_err(|_| AdapterError::Backend(BAD_GRAPHICS_BACKEND));
             }
             WireEvent::Resize { width, height } => {
                 (EVENT_RESIZE, width.to_ne_bytes(), height.to_ne_bytes())
@@ -644,6 +676,94 @@ pub fn decode_layout_patch_event(
     Ok(Some((decode_layout_patch_body(body)?, size)))
 }
 
+fn graphics_backend_words(
+    event: GraphicsBackendCapabilities,
+) -> [u32; GRAPHICS_BACKEND_WORD_COUNT] {
+    [
+        GRAPHICS_BACKEND_MAGIC,
+        event.host_os.tag(),
+        event.backend.tag(),
+        event.capabilities.max_texture_size,
+        event.capabilities.msaa_samples,
+        event.capabilities.supported_effects,
+        event.capabilities.requires_live_device as u32,
+        event.capabilities.max_command_buffers,
+        event.reason.tag(),
+    ]
+}
+
+/// Encode opcode 7 with nine native-endian words: `OPGB` magic, host OS tag,
+/// backend tag, the five capability fields and the selection reason tag.
+pub fn encode_graphics_backend_event(
+    event: GraphicsBackendCapabilities,
+) -> Result<Vec<u8>, BackendError> {
+    event.validate()?;
+    let mut body = Vec::with_capacity(GRAPHICS_BACKEND_BODY_LEN);
+    for word in graphics_backend_words(event) {
+        body.extend_from_slice(&word.to_ne_bytes());
+    }
+    encode_message(EVENT_OBJECT_ID, EVENT_GRAPHICS_BACKEND, &body)
+        .map_err(|_| BackendError::InvalidWireLength)
+}
+
+fn graphics_backend_from_words(
+    words: [u32; GRAPHICS_BACKEND_WORD_COUNT],
+) -> Result<GraphicsBackendCapabilities, BackendError> {
+    if words[0] != GRAPHICS_BACKEND_MAGIC {
+        return Err(BackendError::InvalidWireMagic);
+    }
+    let requires_live_device = match words[6] {
+        0 => false,
+        1 => true,
+        _ => return Err(BackendError::InvalidWireFlag),
+    };
+    let event = GraphicsBackendCapabilities {
+        host_os: HostOs::from_tag(words[1])?,
+        backend: GraphicsBackend::from_tag(words[2])?,
+        capabilities: GraphicsCapabilities {
+            max_texture_size: words[3],
+            msaa_samples: words[4],
+            supported_effects: words[5],
+            requires_live_device,
+            max_command_buffers: words[7],
+        },
+        reason: SelectionReason::from_tag(words[8])?,
+    };
+    event.validate()?;
+    Ok(event)
+}
+
+fn decode_graphics_backend_body(body: &[u8]) -> Result<GraphicsBackendCapabilities, BackendError> {
+    if body.len() != GRAPHICS_BACKEND_BODY_LEN {
+        return Err(BackendError::InvalidWireLength);
+    }
+    let mut words = [0u32; GRAPHICS_BACKEND_WORD_COUNT];
+    for (word, chunk) in words.iter_mut().zip(body.chunks_exact(4)) {
+        *word = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    }
+    graphics_backend_from_words(words)
+}
+
+/// Decode only a graphics backend capability event, preserving the concrete
+/// typed reason for malformed tags, capabilities, header, object or opcode.
+/// A partial message is `Ok(None)`.
+pub fn decode_graphics_backend_event(
+    bytes: &[u8],
+) -> Result<Option<(GraphicsBackendCapabilities, usize)>, BackendError> {
+    let Some((parsed, body, size)) =
+        next_event(bytes).map_err(|_| BackendError::InvalidWireHeader)?
+    else {
+        return Ok(None);
+    };
+    if parsed.object_id != EVENT_OBJECT_ID {
+        return Err(BackendError::InvalidWireObject);
+    }
+    if parsed.opcode != EVENT_GRAPHICS_BACKEND {
+        return Err(BackendError::InvalidWireOpcode);
+    }
+    Ok(Some((decode_graphics_backend_body(body)?, size)))
+}
+
 /// Take the first complete event from a stream. A partial message is
 /// `Ok(None)`; a malformed one is a concrete `Err`, never a panic.
 pub fn decode_event(bytes: &[u8]) -> Result<Option<(WireEvent, usize)>, AdapterError> {
@@ -662,6 +782,11 @@ pub fn decode_event(bytes: &[u8]) -> Result<Option<(WireEvent, usize)>, AdapterE
         let patch =
             decode_layout_patch_body(body).map_err(|_| AdapterError::Backend(BAD_LAYOUT_PATCH))?;
         return Ok(Some((WireEvent::LayoutPatch(patch), size)));
+    }
+    if parsed.opcode == EVENT_GRAPHICS_BACKEND {
+        let capabilities = decode_graphics_backend_body(body)
+            .map_err(|_| AdapterError::Backend(BAD_GRAPHICS_BACKEND))?;
+        return Ok(Some((WireEvent::GraphicsBackend(capabilities), size)));
     }
     if body.len() != 8 {
         return Err(AdapterError::Backend(BAD_EVENT_BODY));
@@ -982,6 +1107,7 @@ mod tests {
             encode_registry_bind(2, 9, "wl_output", 4, 6).unwrap(),
             encode_create_pool(3, 4, 24).unwrap(),
             encode_create_buffer(4, 5, 0, 2, 3, 8, WL_SHM_FORMAT_ARGB8888).unwrap(),
+            encode_graphics_backend_event(GraphicsBackendCapabilities::software_default()).unwrap(),
         ];
         for message in &messages {
             assert_eq!(message.len() % 4, 0, "a message is word aligned");

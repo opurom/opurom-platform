@@ -1,4 +1,4 @@
-//! Deterministic `PlatformView` bridge contract (a framework `PlatformView` model).
+//! Deterministic platform view bridge contract.
 //!
 //! The registry owns native-view handles, integer logical-pixel bounds and a
 //! stable compositing order relative to self-drawn nodes. Lifecycle state is
@@ -268,8 +268,8 @@ impl PlatformViewRegistry {
     }
 
     /// Forward a pointer or keyboard-focus event and advance the lifecycle on
-    /// the first input. Resize, geometry and layout patch events are window
-    /// state, not input. A disposed view stops receiving input.
+    /// the first input. Resize, geometry, layout patch and backend capability
+    /// events are window state, not input. A disposed view stops receiving input.
     pub fn forward_input(
         &mut self,
         handle: ViewHandle,
@@ -286,6 +286,7 @@ impl PlatformViewRegistry {
                 height: _
             } | WireEvent::Geometry(_)
                 | WireEvent::LayoutPatch(_)
+                | WireEvent::GraphicsBackend(_)
         ) {
             return Err(PlatformViewError::InvalidInput(handle));
         }
@@ -366,7 +367,9 @@ impl Default for PlatformViewRegistry {
 mod tests {
     use super::*;
     use crate::wayland_wire::WireEvent;
-    use crate::{layout_patch, DisplayGeometry, Posture, WindowRole, DPI_UNIT};
+    use crate::{
+        layout_patch, DisplayGeometry, GraphicsBackendCapabilities, Posture, WindowRole, DPI_UNIT,
+    };
 
     fn bounds(width: i32, height: i32) -> ViewBounds {
         ViewBounds::new(0, 0, width, height).unwrap()
@@ -593,6 +596,13 @@ mod tests {
         let patch = layout_patch(geometry).unwrap();
         assert_eq!(
             registry.forward_input(handle, WireEvent::LayoutPatch(patch)),
+            Err(PlatformViewError::InvalidInput(handle))
+        );
+        assert_eq!(
+            registry.forward_input(
+                handle,
+                WireEvent::GraphicsBackend(GraphicsBackendCapabilities::software_default())
+            ),
             Err(PlatformViewError::InvalidInput(handle))
         );
         assert_eq!(registry.lifecycle(handle).unwrap(), ViewLifecycle::Resized);

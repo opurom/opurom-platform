@@ -1,7 +1,7 @@
 # opurom-platform - Platform Adapter ABI 0.1.0 + GPU presentation
 
 Independent Rust crate implementing the normative
-[the framework implementation](the framework implementation). The ABI, registry,
+the framework implementation. The ABI, registry,
 `Headless`, `Terminal` and `WindowSet` remain pure Rust. PNG encoding uses the
 cached `png` crate; macOS AppKit/CoreGraphics dependencies are target-scoped,
 so Linux CI builds the crate without AppKit. The macOS host adds a real `NSApplication`
@@ -12,7 +12,9 @@ window, captures the window's own pixels with `cacheDisplay(in:to:)` and
 compares them against the software renderer. The native surfaces add compile-verified Win32
 and X11 window hosts plus permission-aware macOS accessibility posting. The GPU
 presentation path presents the GPU compute buffer into that live window's `CAMetalLayer`
-drawable and verifies the on-screen pixels.
+drawable and verifies the on-screen pixels. `src/graphics_backend.rs` adds a pure,
+integer-only ANGLE/D3D11/D3D12/Metal/Vulkan/Software capability model and additive
+wire framing; it makes no driver calls.
 
 ## Status
 
@@ -133,6 +135,8 @@ renders a real frame. The mobile and handheld rows have no adapter and stay
 | `known_platforms()` / `platforms_with()` / `supports()` | complete platform enumeration and queries over the four boolean `Capability` flags |
 | `WindowSet` | 2..4 independent viewports with isolated sizes, event FIFOs and frame buffers |
 | `display_geometry` | pure integer `DisplayGeometry` validation, `resolve_layout` decisions and the nine-word Wayland geometry event |
+| `graphics_backend` | pure integer `GraphicsBackend` capability table, deterministic `select_backend`, typed fallback reasons and additive opcode 7 wire framing |
+| `PlatformAdapter::graphics_backend` / `graphics_capabilities` | deterministic Software default; `Headless` and macOS `MacHost` report the capability row applied from the wire |
 | `PlatformViewRegistry` | deterministic native-view registry: shared 8-byte `OPV1` handle encoding, integer logical-pixel bounds, strict lifecycle and stable Z-order |
 | `frame_to_png(FrameView, path)` | real PNG output through a `CGImage` on macOS; documented `AppKitUnavailable` error elsewhere |
 | `open_window()` (macOS) | real `NSWindow`/`NSView`; draw, `cacheDisplay(in:to:)` capture, real PNG |
@@ -336,8 +340,8 @@ of 30 000** (0.0000 %), max channel delta 25, **PASS**. The GPU presentation
 integration test decodes that PNG independently and repeats the tolerance
 comparison.
 
-The path is macOS/Metal only: one window, one presented frame, no
-Vulkan/ANGLE/D3D, no GPU text shaping and no measured fps claim.
+The path is macOS/Metal only: one window, one presented frame, no live
+Vulkan/ANGLE/D3D driver path, no GPU text shaping and no measured fps claim.
 `APPKIT_SPEC.gpu` stays `false` because the adapter's
 `present` method is unchanged; the real drawable path is this separate CLI.
 `cacheDisplay` sees the exact presented IOSurface, not a CPU re-render of the
@@ -395,7 +399,8 @@ available. Metal/API errors, a mismatched sequence or a stale surface print
 
 This is a bounded deterministic sequence of four presented frames on one
 window, not a real-time render loop. There is no fps claim, no smoothness or
-vsync claim, no device conformance matrix and no Vulkan/ANGLE/D3D backend.
+vsync claim, no device conformance matrix and no live Vulkan/ANGLE/D3D driver
+path. The `graphics_backend` module is a capability model, not a backend.
 
 ### Pure RGBA8 to PNG path
 
@@ -474,10 +479,67 @@ operation, so a resize, a fold/unfold transition or a tablet split gives the
 same decision on every host. `tests/display_geometry.rs` covers validation,
 all five tiers, split determinism, wire framing and malformed input.
 
+### Graphics backend capability model
+
+`src/graphics_backend.rs` is pure Rust and integer-only. It models backend
+selection and capability rows for ANGLE (OpenGL ES translation), D3D11/D3D12,
+Metal, Vulkan and Software. There are no driver calls, no wall clock, no
+randomness and no new crate dependency. The module's `Capabilities` is
+re-exported as `GraphicsCapabilities` because the crate root already owns the
+platform `Capabilities` row.
+
+Effect bits are `EFFECT_BLEND = 1`, `EFFECT_BLUR = 2`, `EFFECT_SHADOW = 4` and
+`EFFECT_COMPUTE = 8`. Every row includes blend, uses a power-of-two integer MSAA
+count in `1..=16`, a texture size in `256..=16384` and `1..=8` command buffers;
+a row without a live device supports only blend at one sample.
+`Capabilities::validate()` and `validate_for()` reject unknown effect bits,
+invalid ranges, internal inconsistencies and rows that do not match one
+backend's defaults with typed `BackendError` values, never panics.
+
+| Backend | Tag | Host OS | Max texture | MSAA | Effects | Live device | Command buffers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `Metal` | 1 | macOS | 16384 | 8 | `0xf` blend/blur/shadow/compute | true | 3 |
+| `Vulkan` | 2 | all | 16384 | 16 | `0xf` blend/blur/shadow/compute | true | 8 |
+| `AngleGlEs` | 3 | all | 8192 | 4 | `0x7` blend/blur/shadow | true | 1 |
+| `D3D11` | 4 | Windows | 16384 | 8 | `0x7` blend/blur/shadow | true | 4 |
+| `D3D12` | 5 | Windows | 16384 | 16 | `0xf` blend/blur/shadow/compute | true | 8 |
+| `Software` | 6 | all | 4096 | 1 | `0x1` blend | false | 1 |
+
+`HostDescriptor { os, available, preferences }` names the OS class, the
+available hardware backends and the preference order. The pure
+`select_backend(&host, Option<GraphicsBackend>) -> Result<GraphicsBackend, BackendError>`
+first validates the descriptor's canonical rows, then chooses (1) an available,
+OS-supported explicit request, (2) the first available supported preference,
+(3) the first available supported backend in list order, or (4) `Software`.
+Metal is macOS-only and D3D11/D3D12 are Windows-only; Vulkan, ANGLE and Software
+support every OS class. Software fallback is unconditional and need not be
+listed in `available`. `select_backend_with_reason()` returns
+`BackendSelection { backend, reason }`: `SelectionReason` is `HostDefault`,
+`Requested`, `Preferred`, `Available` or `SoftwareFallback(FallbackReason)`.
+`FallbackReason` names `NoAvailableBackends`, `NoSupportedBackend`,
+`RequestedBackendUnavailable` or `RequestedBackendUnsupported`.
+
+`WireEvent::GraphicsBackend` is additive opcode 7 on `EVENT_OBJECT_ID` with the
+same 8-byte Wayland-style header, giving a 44-byte message of nine native-endian
+words: `OPGB` magic, host OS tag (1..4), backend tag (1..6), max texture size,
+MSAA samples, effect mask, live-device flag (0/1), max command buffers and
+selection reason tag (1..4 or `0x10..0x13`). `encode_graphics_backend_event()`
+validates the row first. `decode_graphics_backend_event()` preserves concrete
+`BackendError`s for unknown tags, unknown effects, mismatched capability rows,
+wrong header/object/opcode/length/magic or an invalid flag; a partial prefix is
+`Ok(None)`. `decode_event()` and `decode_batch()` map malformed payloads to
+`AdapterError` without panicking. `Headless` starts at canonical Software with
+`HostDefault`; `apply_wire_bytes()` updates that state, and `Headless` /
+`PlatformAdapter` expose typed `graphics_backend()` and
+`graphics_capabilities()` getters. macOS `MacHost` delegates both getters to its
+`Headless` state. `tests/graphics_backend.rs` covers every capability row,
+selection and fallback reasons, wire round-trips for every backend, concrete
+framing bytes, malformed payloads and truncated prefixes.
+
 ### PlatformView bridge contract
 
 `src/platform_view.rs` is a deterministic, headless-testable native-view bridge
-contract in the a framework `PlatformView` model. It is pure Rust and runs on every
+contract in the platform view model. It is pure Rust and runs on every
 host, so native widget bridges can be validated without a live window.
 
 `PlatformViewRegistry::register(handle, bounds, z_order)` adds a view in the
@@ -601,6 +663,8 @@ libraries and the wire encoding is verified by `cargo test` everywhere.
 | `wl_shm` contract | `src/wayland_wire.rs` | 32-bit `ARGB8888`/`XRGB8888` formats at four bytes per pixel, a word-aligned stride of at least `width * 4`, and a pool size of `offset + stride * height` |
 | Event framing | `src/wayland_wire.rs` | resize, press/release/move and keyboard-focus events as two-word messages, a bounded batch decoder, and fixed-table round-trip tests |
 | Geometry event | `src/wayland_wire.rs` | opcode 5 on `EVENT_OBJECT_ID`: a 44-byte message with nine native-endian words carrying the validated display geometry and fold state |
+| Layout patch | `src/wayland_wire.rs` | opcode 6 on `EVENT_OBJECT_ID`: a 100-byte message with 23 native-endian words carrying a validated layout decision |
+| Graphics backend capability | `src/wayland_wire.rs` | opcode 7 on `EVENT_OBJECT_ID`: a 44-byte message with nine native-endian words carrying host OS, backend, canonical capability row and typed selection reason |
 
 Native hosts normalize resize and pointer events into the same two 32-bit
 words: Win32 packs `WM_SIZE` and `WM_LBUTTONDOWN` coordinates into `lparam`,
@@ -620,6 +684,10 @@ tags, a hinge angle outside 0..180, an angle on a non-hinge posture, and any
 geometry that fails the table above. `decode_geometry_event` returns the
 concrete `GeometryError`; `decode_event` and `decode_batch` expose the same
 message as `WireEvent::Geometry` with an `AdapterError` on malformed bytes.
+
+Opcode 7 is additive: it reuses the same header and bounded batch decoder
+without changing opcodes 0..6. Its typed errors, capability validation and
+concrete framing are covered in the graphics backend capability model above.
 
 The handshake assertions use concrete wire bytes; event framing uses
 fixed-table round-trip tests. On a little-endian host the handshake is:
@@ -729,15 +797,13 @@ From the umbrella root the built CLI can be invoked directly as
 `./opurom-platform/target/debug/opurom-platform --verify-gpu-presentation --out /tmp/opurom-gpu-presentation.png`;
 the renderer, IR and GPU dylib paths are absolute and CWD-independent.
 
-`cargo test --offline` runs **115 tests** on macOS: 52 library unit tests
+`cargo test` runs **138 tests** on macOS: 52 library unit tests
 (including four pure animation-loop checks, fifteen pure Wayland wire checks
-and nine PlatformView checks), two accessibility tests, eleven
-AppKit host tests, two CLI tests, twenty-six conformance tests, seven
-animation-loop integration tests, four GPU presentation integration tests
-(presentation-on-screen, forced SKIP, missing-dylib SKIP and status honesty),
-four native-window tests, three Wayland integration tests
-(missing display, empty display and a named display without a compositor) and
-four window-metadata tests.
+and nine PlatformView checks) and 86 integration tests (two accessibility,
+eleven AppKit host, two CLI, twenty-six conformance, eight display-geometry,
+eight graphics-backend, seven animation-loop, four GPU presentation,
+four native-window, seven viewport-layout, three Wayland and four
+window-metadata).
 Win32 adds two, X11 adds three and Wayland adds one pure unit test that are
 compiled, not
 executed, by their target's `--all-targets` check. The Linux source has no

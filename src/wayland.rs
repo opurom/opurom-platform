@@ -1,4 +1,4 @@
-//! Wayland client host (TRANSPORT_AND_the language rules framework rules).
+//! Wayland client host (the transport implementation framework rules).
 //!
 //! libwayland-client is loaded at runtime with `dlopen`/`dlsym` instead of a
 //! link-time `-lwayland-client` dependency, so a Linux CI runner needs neither

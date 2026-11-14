@@ -2,11 +2,13 @@ use std::collections::VecDeque;
 
 use crate::wayland_wire::{decode_batch, WireEvent};
 use crate::{
-    layout_patch, AdapterError, Capabilities, FrameView, InputEvent, LayoutPatch, PlatformAdapter,
-    Rect, Size, HEADLESS_SPEC,
+    layout_patch, AdapterError, Capabilities, FrameView, GraphicsBackend,
+    GraphicsBackendCapabilities, InputEvent, LayoutPatch, PlatformAdapter, Rect, Size,
+    HEADLESS_SPEC,
 };
 
 const BAD_LAYOUT: &str = "viewport layout event is invalid";
+const BAD_GRAPHICS_BACKEND: &str = "graphics backend capability event is invalid";
 
 /// Fully implemented 0.1.0 reference adapter and conformance oracle.
 /// No windowing dependency; runs on any OS.
@@ -18,6 +20,7 @@ pub struct Headless {
     pixels: Vec<u8>,
     digest: String,
     layout: LayoutPatch,
+    graphics: GraphicsBackendCapabilities,
 }
 
 impl Headless {
@@ -33,6 +36,7 @@ impl Headless {
             pixels: Vec::new(),
             digest: hex(fnv1a(&[])),
             layout: LayoutPatch::from_size(viewport),
+            graphics: GraphicsBackendCapabilities::software_default(),
         }
     }
 
@@ -55,6 +59,16 @@ impl Headless {
         self.layout.content
     }
 
+    /// Selected graphics backend for this headless host.
+    pub fn graphics_backend(&self) -> GraphicsBackend {
+        self.graphics.backend
+    }
+
+    /// Full backend capability row and its typed selection reason.
+    pub fn graphics_capabilities(&self) -> GraphicsBackendCapabilities {
+        self.graphics
+    }
+
     /// Apply one decoded wire event. Pointer events do not change viewport state.
     pub fn apply_wire_event(&mut self, event: WireEvent) -> Result<(), AdapterError> {
         match event {
@@ -69,6 +83,12 @@ impl Headless {
                     .validate()
                     .map_err(|_| AdapterError::Backend(BAD_LAYOUT))?;
                 self.apply_layout(patch);
+            }
+            WireEvent::GraphicsBackend(capabilities) => {
+                capabilities
+                    .validate()
+                    .map_err(|_| AdapterError::Backend(BAD_GRAPHICS_BACKEND))?;
+                self.graphics = capabilities;
             }
             _ => {}
         }
@@ -121,6 +141,14 @@ impl PlatformAdapter for Headless {
 
     fn layout(&self) -> LayoutPatch {
         self.layout
+    }
+
+    fn graphics_backend(&self) -> GraphicsBackend {
+        self.graphics.backend
+    }
+
+    fn graphics_capabilities(&self) -> GraphicsBackendCapabilities {
+        self.graphics
     }
 
     fn poll_event(&mut self) -> Option<InputEvent> {

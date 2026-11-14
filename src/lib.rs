@@ -12,7 +12,9 @@
 //! `display_geometry` adds an integer-only fold-aware geometry model, a pure
 //! responsive layout resolver and a framed geometry event for split-screen and
 //! foldable transitions. `viewport_layout` applies those decisions to host
-//! viewport state without changing framebuffer dimensions. The AppKit/CoreGraphics
+//! viewport state without changing framebuffer dimensions. `graphics_backend`
+//! adds an integer-only ANGLE/D3D/Metal/Vulkan/Software capability model, pure
+//! selection with typed reasons and additive opcode-7 wire framing. The AppKit/CoreGraphics
 //! dependencies are target-scoped, so Linux CI builds the ABI and the
 //! cross-platform hosts without AppKit.
 
@@ -22,6 +24,7 @@ mod a11y;
 pub mod display_geometry;
 pub mod gpu_animation;
 pub mod gpu_presentation;
+pub mod graphics_backend;
 mod headless;
 mod pixel;
 mod png;
@@ -66,6 +69,13 @@ pub use gpu_presentation::{
     classify, gpu_library_path, present_animation_frame, present_display_list, workspace_root,
     FrameTimings, PresentationOutcome, GPU_DYLIB_ENV, PRESENT_ERROR, PRESENT_INVALID_ARGUMENT,
     PRESENT_METAL_UNAVAILABLE, PRESENT_NO_DRAWABLE, PRESENT_OK, PRESENT_UNSUPPORTED,
+};
+pub use graphics_backend::{
+    select_backend, select_backend_with_reason, BackendError, BackendSelection,
+    Capabilities as GraphicsCapabilities, FallbackReason, GraphicsBackend,
+    GraphicsBackendCapabilities, HostDescriptor, HostOs, SelectionReason, EFFECT_BLEND,
+    EFFECT_BLUR, EFFECT_COMPUTE, EFFECT_MASK, EFFECT_SHADOW, FALLBACK_REASON_BASE,
+    MAX_COMMAND_BUFFERS, MAX_MSAA_SAMPLES, MAX_TEXTURE_SIZE, MIN_TEXTURE_SIZE,
 };
 pub use headless::Headless;
 pub use pixel::{compare_rgba_to_ppm, PixelComparison, CHANNEL_TOLERANCE, MISMATCH_BUDGET_PERCENT};
@@ -201,6 +211,21 @@ pub trait PlatformAdapter {
     fn content_viewport(&self) -> Rect {
         self.layout().content
     }
+
+    /// Deterministic graphics backend selected by this adapter. Plain adapters
+    /// report Software; hosts with a selected device override both getters.
+    fn graphics_backend(&self) -> GraphicsBackend {
+        GraphicsBackend::Software
+    }
+
+    /// The full backend capability row and its typed selection reason.
+    fn graphics_capabilities(&self) -> GraphicsBackendCapabilities {
+        GraphicsBackendCapabilities::new(
+            HostOs::host(),
+            self.graphics_backend(),
+            SelectionReason::HostDefault,
+        )
+    }
 }
 
 /// Verified status of a platform. Never claim `Verified` for a scaffold.
@@ -324,7 +349,7 @@ const fn caps(multi_window: bool, lifecycle: bool, dpi_scale: f32) -> Capabiliti
     }
 }
 
-/// The Wayland client host row (TRANSPORT_AND_the language rules framework rules).
+/// The Wayland client host row (the transport implementation framework rules).
 /// The wire encoder, the runtime `dlopen`/`dlsym` loader and the setup
 /// handshake are implemented and unit-tested; a live surface needs a running
 /// compositor, so the row stays `Planned` until one is available.

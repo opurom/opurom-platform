@@ -23,8 +23,9 @@ use objc2_quartz_core::{CAMetalLayer, CATransaction};
 
 use crate::wayland_wire::WireEvent;
 use crate::{
-    appkit_capabilities, frame_to_png, AdapterError, Capabilities, FrameView, Headless, InputEvent,
-    LayoutPatch, PlatformAdapter, Rect, Size, APPKIT_SPEC,
+    appkit_capabilities, frame_to_png, AdapterError, Capabilities, FrameView, GraphicsBackend,
+    GraphicsBackendCapabilities, Headless, InputEvent, LayoutPatch, PlatformAdapter, Rect, Size,
+    APPKIT_SPEC,
 };
 
 const WINDOW_STYLE_NAME: &str = "Titled|Closable|Miniaturizable|Resizable";
@@ -195,6 +196,14 @@ impl MacHost {
         self.headless.content_viewport()
     }
 
+    pub fn graphics_backend(&self) -> GraphicsBackend {
+        self.headless.graphics_backend()
+    }
+
+    pub fn graphics_capabilities(&self) -> GraphicsBackendCapabilities {
+        self.headless.graphics_capabilities()
+    }
+
     pub fn apply_wire_event(&mut self, event: WireEvent) -> Result<(), AdapterError> {
         self.headless.apply_wire_event(event)
     }
@@ -275,6 +284,14 @@ impl PlatformAdapter for MacHost {
 
     fn layout(&self) -> LayoutPatch {
         self.headless.layout()
+    }
+
+    fn graphics_backend(&self) -> GraphicsBackend {
+        self.headless.graphics_backend()
+    }
+
+    fn graphics_capabilities(&self) -> GraphicsBackendCapabilities {
+        self.headless.graphics_capabilities()
     }
 
     fn poll_event(&mut self) -> Option<InputEvent> {
