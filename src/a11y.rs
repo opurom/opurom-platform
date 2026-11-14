@@ -63,6 +63,8 @@ pub struct A11yNode {
     pub label: String,
     pub bounds: [i64; 4],
     pub hidden: bool,
+    /// A disabled control is still posted to the AX tree but never takes focus.
+    pub disabled: bool,
 }
 
 /// A visible node mapped to AX coordinates (`frame` has a bottom-left origin).
@@ -201,6 +203,14 @@ fn parse_bool(rest: &str) -> Result<bool, AdapterError> {
     }
 }
 
+/// Parse an optional boolean field the renderer may omit; absent means `false`.
+fn parse_optional_bool_field(line: &str, key: &str) -> Result<bool, AdapterError> {
+    match line.find(key) {
+        Some(at) => parse_bool(line[at + key.len()..].trim_start()),
+        None => Ok(false),
+    }
+}
+
 /// Read the renderer's deterministic one-object-per-line accessibility tree JSON.
 /// Unknown roles and malformed fields are errors, not silent guesses.
 pub fn parse_a11y_json(text: &str) -> Result<Vec<A11yNode>, AdapterError> {
@@ -220,12 +230,14 @@ pub fn parse_a11y_json(text: &str) -> Result<Vec<A11yNode>, AdapterError> {
         let label = parse_string_field(line, "\"label\":")?;
         let bounds = parse_bounds(line)?;
         let hidden = parse_bool(after_key(line, "\"hidden\":")?)?;
+        let disabled = parse_optional_bool_field(line, "\"disabled\":")?;
         nodes.push(A11yNode {
             id,
             role,
             label,
             bounds,
             hidden,
+            disabled,
         });
     }
     Ok(nodes)
@@ -253,6 +265,91 @@ pub fn map_a11y_tree(nodes: &[A11yNode]) -> Vec<AxElement> {
             }
         })
         .collect()
+}
+
+/// Honest outcome of the focus-order verification: a value, never a fabricated
+/// PASS, in the same shape as `Verification` and `A11yPost`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FocusOrder {
+    /// The focusable nodes in document order.
+    Passed { order: Vec<u32> },
+    /// The tree cannot support deterministic focus traversal; `reason` says why.
+    Failed { reason: String },
+}
+
+impl FocusOrder {
+    /// The reported verdict string: `PASS` or `FAIL`.
+    pub fn verdict(&self) -> &'static str {
+        match self {
+            Self::Passed { .. } => "PASS",
+            Self::Failed { .. } => "FAIL",
+        }
+    }
+
+    /// A one-line human readable report.
+    pub fn report(&self) -> String {
+        match self {
+            Self::Passed { order } => format!("PASS focus_nodes={}", order.len()),
+            Self::Failed { reason } => format!("FAIL {reason}"),
+        }
+    }
+}
+
+/// Roles that participate in keyboard focus: the interactive controls.
+fn focusable(node: &A11yNode) -> bool {
+    !node.hidden
+        && !node.disabled
+        && matches!(
+            node.role,
+            AxRole::Button | AxRole::CheckBox | AxRole::Slider
+        )
+}
+
+fn describe(node: &A11yNode) -> String {
+    if node.label.is_empty() {
+        node.role.ax_name().to_string()
+    } else {
+        format!("{} \"{}\"", node.role.ax_name(), node.label)
+    }
+}
+
+/// Verify deterministic keyboard traversal and return the focus order: the
+/// visible, enabled interactive nodes in document order.
+///
+/// Three assertions, each failing with a precise message: focusable nodes are
+/// listed in document order (the renderer numbers nodes in pre-order), a
+/// disabled node is skipped, and every focusable node has non-empty bounds.
+pub fn focus_order(nodes: &[A11yNode]) -> FocusOrder {
+    let mut order = Vec::new();
+    let mut previous: Option<u32> = None;
+    for node in nodes {
+        if !focusable(node) {
+            continue;
+        }
+        if let Some(previous) = previous {
+            if node.id <= previous {
+                return FocusOrder::Failed {
+                    reason: format!(
+                        "focusable node {} does not follow node {previous}: the a11y tree must list focusable nodes in document order",
+                        node.id
+                    ),
+                };
+            }
+        }
+        let [x, y, width, height] = node.bounds;
+        if width <= 0 || height <= 0 {
+            return FocusOrder::Failed {
+                reason: format!(
+                    "focusable node {} ({}) has empty bounds [{x},{y},{width},{height}]",
+                    node.id,
+                    describe(node)
+                ),
+            };
+        }
+        previous = Some(node.id);
+        order.push(node.id);
+    }
+    FocusOrder::Passed { order }
 }
 
 /// Check OS Accessibility trust and post the mapped tree on macOS.
@@ -410,7 +507,9 @@ mod macos {
 
 #[cfg(test)]
 mod tests {
-    use super::{map_a11y_tree, parse_a11y_json, AxRole, DEFAULT_A11Y_TREE};
+    use super::{
+        focus_order, map_a11y_tree, parse_a11y_json, AxRole, FocusOrder, DEFAULT_A11Y_TREE,
+    };
 
     #[test]
     fn renderer_tree_maps_to_ax_without_os_permission() {
@@ -456,5 +555,98 @@ mod tests {
             "[\n  {\"id\":1,\"role\":\"button\",\"label\":\"\",\"bounds\":[0,0,1],\"hidden\":false}\n]"
         )
         .is_err());
+    }
+
+    #[test]
+    fn a_disabled_node_is_skipped_but_still_posted() {
+        let text = concat!(
+            "[\n",
+            "  {\"id\":1,\"role\":\"button\",\"label\":\"On\",\"bounds\":[0,0,10,10],\"hidden\":false},\n",
+            "  {\"id\":2,\"role\":\"button\",\"label\":\"Off\",\"bounds\":[0,12,10,10],\"hidden\":false,\"disabled\":true},\n",
+            "  {\"id\":3,\"role\":\"checkbox\",\"label\":\"\",\"bounds\":[0,24,10,10],\"hidden\":false}\n",
+            "]"
+        );
+        let nodes = parse_a11y_json(text).unwrap();
+        assert!(!nodes[0].disabled, "an absent field defaults to false");
+        assert!(nodes[1].disabled);
+        let outcome = focus_order(&nodes);
+        assert_eq!(outcome.verdict(), "PASS");
+        assert_eq!(outcome.report(), "PASS focus_nodes=2");
+        assert_eq!(
+            outcome,
+            FocusOrder::Passed { order: vec![1, 3] },
+            "the disabled button is skipped, the rest keep document order"
+        );
+        assert_eq!(
+            map_a11y_tree(&nodes).len(),
+            3,
+            "a disabled node is still posted to the AX tree"
+        );
+    }
+
+    #[test]
+    fn empty_bounds_fail_with_a_precise_message() {
+        let nodes = parse_a11y_json(concat!(
+            "[\n",
+            "  {\"id\":3,\"role\":\"button\",\"label\":\"Go\",\"bounds\":[4,55,0,0],\"hidden\":false}\n",
+            "]"
+        ))
+        .unwrap();
+        let outcome = focus_order(&nodes);
+        assert_eq!(outcome.verdict(), "FAIL");
+        assert_eq!(
+            outcome,
+            FocusOrder::Failed {
+                reason: "focusable node 3 (AXButton \"Go\") has empty bounds [4,55,0,0]"
+                    .to_string(),
+            }
+        );
+
+        let nodes = parse_a11y_json(concat!(
+            "[\n",
+            "  {\"id\":7,\"role\":\"slider\",\"label\":\"\",\"bounds\":[4,55,-1,8],\"hidden\":false}\n",
+            "]"
+        ))
+        .unwrap();
+        assert_eq!(
+            focus_order(&nodes),
+            FocusOrder::Failed {
+                reason: "focusable node 7 (AXSlider) has empty bounds [4,55,-1,8]".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn out_of_document_order_fails_with_a_precise_message() {
+        let text = concat!(
+            "[\n",
+            "  {\"id\":4,\"role\":\"button\",\"label\":\"Late\",\"bounds\":[0,0,10,10],\"hidden\":false},\n",
+            "  {\"id\":2,\"role\":\"button\",\"label\":\"Early\",\"bounds\":[0,12,10,10],\"hidden\":false}\n",
+            "]"
+        );
+        let nodes = parse_a11y_json(text).unwrap();
+        assert_eq!(
+            focus_order(&nodes),
+            FocusOrder::Failed {
+                reason: "focusable node 2 does not follow node 4: the a11y tree must list focusable nodes in document order"
+                    .to_string(),
+            }
+        );
+
+        // A duplicated node breaks pre-order the same way.
+        let text = concat!(
+            "[\n",
+            "  {\"id\":5,\"role\":\"button\",\"label\":\"A\",\"bounds\":[0,0,10,10],\"hidden\":false},\n",
+            "  {\"id\":5,\"role\":\"button\",\"label\":\"B\",\"bounds\":[0,12,10,10],\"hidden\":false}\n",
+            "]"
+        );
+        let nodes = parse_a11y_json(text).unwrap();
+        assert_eq!(
+            focus_order(&nodes),
+            FocusOrder::Failed {
+                reason: "focusable node 5 does not follow node 5: the a11y tree must list focusable nodes in document order"
+                    .to_string(),
+            }
+        );
     }
 }

@@ -43,8 +43,8 @@ mod win32;
 mod x11;
 
 pub use a11y::{
-    map_a11y_tree, parse_a11y_json, post_a11y_tree, A11yNode, A11yPost, AxElement, AxRole,
-    DEFAULT_A11Y_TREE, SKIP_A11Y_ENV,
+    focus_order, map_a11y_tree, parse_a11y_json, post_a11y_tree, A11yNode, A11yPost, AxElement,
+    AxRole, FocusOrder, DEFAULT_A11Y_TREE, SKIP_A11Y_ENV,
 };
 pub use gpu_animation::{verify_gpu_animation_loop, ANIMATION_FLAG, ANIMATION_TICKS};
 pub use gpu_presentation::{
