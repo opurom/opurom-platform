@@ -278,7 +278,9 @@ mod appkit {
         assert!(contract.capabilities.native_embed);
         assert!(contract.capabilities.multi_window);
         assert!(!contract.capabilities.gpu);
-        assert!(contract.capabilities.dpi_scale.is_finite() && contract.capabilities.dpi_scale >= 1.0);
+        assert!(
+            contract.capabilities.dpi_scale.is_finite() && contract.capabilities.dpi_scale >= 1.0
+        );
         let mut expected = APPKIT_SPEC.clone();
         expected.capabilities.dpi_scale = contract.capabilities.dpi_scale;
         assert_eq!(contract, expected);

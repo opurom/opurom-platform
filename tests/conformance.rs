@@ -263,7 +263,11 @@ fn registry_status_matches_the_presence_of_a_real_adapter() {
     // Verified. Every row that has no adapter must stay non-Verified.
     for name in ["windows", "macos", "linux"] {
         let contract = spec_by_name(name).unwrap();
-        assert_eq!(contract.status, Status::Verified, "{name} has a host adapter");
+        assert_eq!(
+            contract.status,
+            Status::Verified,
+            "{name} has a host adapter"
+        );
         assert_eq!(contract.emitter, "native", "{name} is a native target row");
     }
     for name in ["android", "ios", "harmony-mobile", "harmony-pc"] {

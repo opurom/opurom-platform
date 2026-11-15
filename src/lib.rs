@@ -543,5 +543,7 @@ pub fn platforms_with(capability: Capability) -> Vec<PlatformSpec> {
 /// Query any known platform by name: the 14 targets, the headless oracle, the
 /// terminal host, the Wayland host row and (on macOS) the AppKit host.
 pub fn spec_by_name(name: &str) -> Option<PlatformSpec> {
-    known_platforms().into_iter().find(|contract| contract.name == name)
+    known_platforms()
+        .into_iter()
+        .find(|contract| contract.name == name)
 }
