@@ -21,7 +21,10 @@
 use std::fmt;
 
 mod a11y;
+pub mod audio;
 pub mod display_geometry;
+pub mod filesystem;
+pub mod global_hotkey;
 pub mod gpu_animation;
 pub mod gpu_presentation;
 pub mod graphics_backend;
@@ -30,6 +33,7 @@ mod pixel;
 mod png;
 mod ppm;
 mod terminal;
+pub mod tray;
 mod verify;
 mod window_set;
 // Pure X11 pixel maths: used by the Linux adapter and by `cargo test` on every
@@ -546,4 +550,102 @@ pub fn spec_by_name(name: &str) -> Option<PlatformSpec> {
     known_platforms()
         .into_iter()
         .find(|contract| contract.name == name)
+}
+
+/// The desktop native capability surface the music player pulls on: the four
+/// host-facing areas this crate implements per platform. Each row states what
+/// the current build actually provides, so a caller reads the truth instead of
+/// probing: `available` rows have a real adapter on this target, `degraded`
+/// rows fall back to a documented pure model (or a typed reason).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DesktopCapability {
+    Tray,
+    GlobalHotkey,
+    Filesystem,
+    Audio,
+}
+
+impl DesktopCapability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DesktopCapability::Tray => "tray",
+            DesktopCapability::GlobalHotkey => "global_hotkey",
+            DesktopCapability::Filesystem => "filesystem",
+            DesktopCapability::Audio => "audio",
+        }
+    }
+}
+
+/// How one desktop capability is delivered on the current build.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DesktopStatus {
+    /// A real per-platform adapter is compiled in and reaches the OS.
+    Native,
+    /// The pure, deterministic model is available but no device/OS backend
+    /// exists here; the caller degrades as the capability's docs describe.
+    Headless,
+    /// Neither a device nor the model applies on this target.
+    Unavailable,
+}
+
+impl DesktopStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DesktopStatus::Native => "native",
+            DesktopStatus::Headless => "headless",
+            DesktopStatus::Unavailable => "unavailable",
+        }
+    }
+}
+
+/// One row of the desktop capability matrix: the capability and how this
+/// build delivers it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DesktopSupport {
+    pub capability: DesktopCapability,
+    pub status: DesktopStatus,
+}
+
+/// The desktop capability matrix for the current build. The filesystem scanner
+/// is host-independent, so it is always `Headless`-available (its real work is
+/// plain file IO, not a device). Tray/Hotkey/Audio are `Native` only where a
+/// real adapter is compiled in, and `Headless` where only the pure model exists.
+pub fn desktop_support() -> Vec<DesktopSupport> {
+    #[cfg(target_os = "macos")]
+    let (tray, hotkey, audio) = (
+        DesktopStatus::Native,
+        DesktopStatus::Native,
+        DesktopStatus::Native,
+    );
+    #[cfg(target_os = "windows")]
+    let (tray, hotkey, audio) = (
+        DesktopStatus::Native,
+        DesktopStatus::Native,
+        DesktopStatus::Headless,
+    );
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let (tray, hotkey, audio) = (
+        DesktopStatus::Unavailable,
+        DesktopStatus::Unavailable,
+        DesktopStatus::Headless,
+    );
+    vec![
+        DesktopSupport {
+            capability: DesktopCapability::Tray,
+            status: tray,
+        },
+        DesktopSupport {
+            capability: DesktopCapability::GlobalHotkey,
+            status: hotkey,
+        },
+        DesktopSupport {
+            capability: DesktopCapability::Filesystem,
+            // The scanner parses real files; it is never a stub.
+            status: DesktopStatus::Native,
+        },
+        DesktopSupport {
+            capability: DesktopCapability::Audio,
+            status: audio,
+        },
+    ]
 }

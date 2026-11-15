@@ -560,6 +560,17 @@ fn main() {
     if args.iter().any(|arg| arg == "--verify-window") {
         std::process::exit(verify_window(&args));
     }
+    if args.iter().any(|arg| arg == "--desktop") {
+        println!("capability | status");
+        for support in opurom_platform::desktop_support() {
+            println!(
+                "{} | {}",
+                support.capability.as_str(),
+                support.status.as_str()
+            );
+        }
+        return;
+    }
 
     // Default output stays the 14 target rows; `--hosts` lists Verified hosts.
     let hosts = args.iter().any(|arg| arg == "--hosts");

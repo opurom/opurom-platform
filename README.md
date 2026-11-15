@@ -143,6 +143,11 @@ renders a real frame. The mobile and handheld rows have no adapter and stay
 | `compare_rgba_to_ppm` | captured window pixels vs the software renderer PPM, with a documented tolerance |
 | `wayland_wire` | pure-Rust Wayland wire encoding: setup handshake, object IDs, opcode/size header, string arguments and the `wl_shm` stride/format contract; unit-tested on every host |
 | `WaylandHost::connect()` (Linux) | runtime `dlopen`/`dlsym` of `libwayland-client.so.0`; no link-time Wayland dependency; a missing runtime library is a documented `Wayland unavailable` error |
+| `tray::TrayHost` | platform-neutral tray menu contract (title, items, `quit_id`), FIFO `ItemClicked`/`QuitRequested` events; `HeadlessTray` reference + real macOS `NSStatusItem` and Windows `Shell_NotifyIconW` adapters; other targets return a typed `Unavailable` reason |
+| `global_hotkey::HotkeyHost` | register/trigger/unregister contract with a named `Modifiers`+`Key` chord model and `parse_chord`; `HeadlessHotkey` reference + real macOS Carbon `RegisterEventHotKey` and Windows `RegisterHotKey` adapters |
+| `filesystem::scan_library` | host-independent recursive audio scanner (sorted, depth-capped) with real ID3v2.3/2.4 and FLAC `VORBIS_COMMENT`+`STREAMINFO` metadata parsing |
+| `audio::AudioHost` / `Transport` | pure platform-shared playback state machine (play/pause/seek/volume/repeat/tick) + real macOS `AVAudioPlayer` adapter; targets with no backend keep the pure `Transport` (documented degradation) |
+| `desktop_support()` | the four desktop capability rows (`tray`, `global_hotkey`, `filesystem`, `audio`) with a per-build `Native`/`Headless`/`Unavailable` status; `--desktop` prints it |
 
 ### Headless reference adapter
 
