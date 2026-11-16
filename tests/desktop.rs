@@ -298,16 +298,18 @@ fn desktop_matrix_names_every_capability_once() {
             "crypto",
             "filesystem",
             "global_hotkey",
+            "socket",
             "storage",
             "tray"
         ]
     );
-    // The filesystem scanner, storage and crypto parse/serve real data everywhere,
-    // so they are native on every build; tray/hotkey/audio vary by target.
+    // The filesystem scanner, storage, crypto and socket parse/serve real data
+    // everywhere, so they are native on every build; tray/hotkey/audio vary.
     for expected in [
         DesktopCapability::Filesystem,
         DesktopCapability::Storage,
         DesktopCapability::Crypto,
+        DesktopCapability::Socket,
     ] {
         let row = matrix.iter().find(|s| s.capability == expected).unwrap();
         assert_eq!(row.status, DesktopStatus::Native);

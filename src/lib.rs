@@ -33,6 +33,7 @@ mod headless;
 mod pixel;
 mod png;
 mod ppm;
+pub mod socket;
 pub mod storage;
 mod terminal;
 pub mod tray;
@@ -567,6 +568,7 @@ pub enum DesktopCapability {
     Audio,
     Storage,
     Crypto,
+    Socket,
 }
 
 impl DesktopCapability {
@@ -578,6 +580,7 @@ impl DesktopCapability {
             DesktopCapability::Audio => "audio",
             DesktopCapability::Storage => "storage",
             DesktopCapability::Crypto => "crypto",
+            DesktopCapability::Socket => "socket",
         }
     }
 }
@@ -661,6 +664,11 @@ pub fn desktop_support() -> Vec<DesktopSupport> {
         DesktopSupport {
             capability: DesktopCapability::Crypto,
             // AES-256-GCM / SHA-256 / system random from ring: real on every host.
+            status: DesktopStatus::Native,
+        },
+        DesktopSupport {
+            capability: DesktopCapability::Socket,
+            // Synchronous TCP over std::net: real on every host.
             status: DesktopStatus::Native,
         },
     ]
