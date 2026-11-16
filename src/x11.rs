@@ -13,6 +13,7 @@ use std::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void};
 use std::ptr::{null, null_mut};
 
 use crate::{
+    ime::ImeStatus,
     input_map,
     x11_pixels::{checked_len, rgba_to_xpixel},
     AdapterError, Capabilities, FrameView, InputEvent, Lifecycle, PlatformAdapter, Size,
@@ -207,6 +208,22 @@ type XPutImageFn = unsafe extern "C" fn(
     c_uint,
 ) -> c_int;
 type XFreeFn = unsafe extern "C" fn(*mut c_void) -> c_int;
+type XOpenIMFn =
+    unsafe extern "C" fn(*mut Display, *mut c_void, *const c_char, *const c_char) -> *mut c_void;
+// `Status` is `int` in Xlib; the return value is ignored here.
+type XCloseIMFn = unsafe extern "C" fn(*mut c_void) -> c_int;
+// XCreateIC is variadic and takes a NULL-terminated name/value list.
+type XCreateICFn = unsafe extern "C" fn(*mut c_void, ...) -> *mut c_void;
+type XDestroyICFn = unsafe extern "C" fn(*mut c_void);
+type XSetICFocusFn = unsafe extern "C" fn(*mut c_void);
+type Xutf8LookupStringFn = unsafe extern "C" fn(
+    *mut c_void,
+    *mut XKeyEvent,
+    *mut c_char,
+    c_int,
+    *mut c_long,
+    *mut c_int,
+) -> c_int;
 
 const ZPIXMAP: c_int = 2;
 const TRUE_COLOR: c_int = 4;
@@ -227,6 +244,16 @@ const EXPOSURE_MASK: c_long = 1 << 15;
 const STRUCTURE_NOTIFY_MASK: c_long = 1 << 17;
 /// `Button1Mask` in an event's `state` field: the primary button is held.
 const BUTTON1_MASK: c_uint = 1 << 8;
+/// `XIMPreeditNothing | XIMStatusNothing`: the input method draws its own
+/// preedit and status windows, so the host needs no XIM callbacks.
+const XIM_NOTHING_STYLE: c_ulong = 0x0008 | 0x0400;
+const XN_INPUT_STYLE: &[u8] = b"inputStyle\0";
+const XN_CLIENT_WINDOW: &[u8] = b"clientWindow\0";
+/// Bytes per composed key press; a longer composition is dropped rather than
+/// resized (`shortcut`: grow on `XBufferOverflow` when real IMEs hit it).
+const LOOKUP_BUFFER: usize = 64;
+const XIM_OPEN_ERROR: &str = "XOpenIM failed: the locale names no supported input method";
+const XIM_IC_ERROR: &str = "XCreateIC failed: the server accepts no supported input style";
 const RTLD_NOW: c_int = 2;
 const RTLD_LOCAL: c_int = 0;
 const X11_SONAMES: [&[u8]; 2] = [b"libX11.so.6\0", b"libX11.so\0"];
@@ -263,6 +290,12 @@ struct Xlib {
     create_image: XImageCreateFn,
     put_image: XPutImageFn,
     free: XFreeFn,
+    open_im: XOpenIMFn,
+    close_im: XCloseIMFn,
+    create_ic: XCreateICFn,
+    destroy_ic: XDestroyICFn,
+    set_ic_focus: XSetICFocusFn,
+    utf8_lookup: Xutf8LookupStringFn,
 }
 
 impl Xlib {
@@ -301,6 +334,12 @@ impl Xlib {
             create_image: symbol(handle, b"XCreateImage\0")?,
             put_image: symbol(handle, b"XPutImage\0")?,
             free: symbol(handle, b"XFree\0")?,
+            open_im: symbol(handle, b"XOpenIM\0")?,
+            close_im: symbol(handle, b"XCloseIM\0")?,
+            create_ic: symbol(handle, b"XCreateIC\0")?,
+            destroy_ic: symbol(handle, b"XDestroyIC\0")?,
+            set_ic_focus: symbol(handle, b"XSetICFocus\0")?,
+            utf8_lookup: symbol(handle, b"Xutf8LookupString\0")?,
         })
     }
 }
@@ -364,6 +403,9 @@ pub struct X11Host {
     last_frame: Vec<u8>,
     last_size: Size,
     closed: bool,
+    xim: *mut c_void,
+    xic: *mut c_void,
+    ime: ImeStatus,
     lib: Xlib,
 }
 
@@ -392,6 +434,9 @@ impl X11Host {
                 height: 0,
             },
             closed: false,
+            xim: null_mut(),
+            xic: null_mut(),
+            ime: ImeStatus::Unavailable(XIM_OPEN_ERROR),
             lib,
         };
         let screen = unsafe { (host.lib.default_screen)(display) };
@@ -459,6 +504,7 @@ impl X11Host {
                 "XSelectInput, XMapWindow or XFlush failed",
             ));
         }
+        host.setup_ime();
         Ok(host)
     }
 
@@ -469,6 +515,14 @@ impl X11Host {
         // SAFETY: handles are null-checked and owned by this host.
         unsafe {
             if !self.display.is_null() {
+                if !self.xic.is_null() {
+                    (self.lib.destroy_ic)(self.xic);
+                    self.xic = null_mut();
+                }
+                if !self.xim.is_null() {
+                    (self.lib.close_im)(self.xim);
+                    self.xim = null_mut();
+                }
                 if !self.gc.is_null() {
                     (self.lib.free_gc)(self.display, self.gc);
                 }
@@ -478,10 +532,84 @@ impl X11Host {
                 (self.lib.close_display)(self.display);
             }
         }
+        self.ime = ImeStatus::Unavailable("the X11 display is closed");
         self.gc = null_mut();
         self.window = 0;
         self.display = null_mut();
         self.closed = true;
+    }
+
+    /// Open the window's input method: a locale or server that refuses leaves
+    /// the host with raw keys only, reported as a typed status.
+    /// shortcut: `XFilterEvent` is not wired; with the Nothing styles the
+    /// input method draws its own windows, so no client-side filtering is due.
+    fn setup_ime(&mut self) {
+        let display = self.display;
+        let window = self.window;
+        if self.closed || display.is_null() || window == 0 {
+            return;
+        }
+        // SAFETY: the display is live and the variadic list is NULL-terminated.
+        let xim = unsafe { (self.lib.open_im)(display, null_mut(), null(), null()) };
+        if xim.is_null() {
+            self.ime = ImeStatus::Unavailable(XIM_OPEN_ERROR);
+            return;
+        }
+        let xic = unsafe {
+            (self.lib.create_ic)(
+                xim,
+                XN_INPUT_STYLE.as_ptr().cast::<c_char>(),
+                XIM_NOTHING_STYLE,
+                XN_CLIENT_WINDOW.as_ptr().cast::<c_char>(),
+                window,
+                std::ptr::null::<c_char>(),
+            )
+        };
+        if xic.is_null() {
+            unsafe { (self.lib.close_im)(xim) };
+            self.ime = ImeStatus::Unavailable(XIM_IC_ERROR);
+            return;
+        }
+        unsafe { (self.lib.set_ic_focus)(xic) };
+        self.xim = xim;
+        self.xic = xic;
+        self.ime = ImeStatus::Ready;
+    }
+
+    /// Whether this window can compose text through the input method, probed
+    /// at open time from the live XIM/XIC pair.
+    pub fn ime(&self) -> ImeStatus {
+        self.ime
+    }
+
+    /// Compose one key press through the input method: bytes that form text
+    /// are queued as `Input` beside the raw `Key` event.
+    fn lookup_text(&mut self, mut key: XKeyEvent) {
+        let mut buffer = [0u8; LOOKUP_BUFFER];
+        let mut keysym: c_long = 0;
+        let mut status: c_int = 0;
+        // SAFETY: the input context, display and event are live objects of
+        // this host, and the buffer outlives the call.
+        let written = unsafe {
+            (self.lib.utf8_lookup)(
+                self.xic,
+                &mut key,
+                buffer.as_mut_ptr().cast::<c_char>(),
+                LOOKUP_BUFFER as c_int,
+                &mut keysym,
+                &mut status,
+            )
+        };
+        if written <= 0 {
+            return;
+        }
+        let text = String::from_utf8_lossy(&buffer[..written as usize]).into_owned();
+        if !text.is_empty() {
+            self.events.push_back(InputEvent::Input {
+                node_id: u32::MAX,
+                text,
+            });
+        }
     }
 
     fn draw(&mut self, width: u32, height: u32, pixels: &[u8]) -> Result<(), AdapterError> {
@@ -570,6 +698,9 @@ impl X11Host {
                     code: key.keycode,
                     pressed: kind == KEY_PRESS,
                 });
+                if kind == KEY_PRESS && !self.xic.is_null() {
+                    self.lookup_text(key);
+                }
             }
             BUTTON_PRESS => {
                 let button = unsafe { event.button };

@@ -14,10 +14,11 @@ use std::ffi::{c_char, c_int, c_short, c_ulong, c_void, CString};
 use std::ptr::null_mut;
 use std::time::{Duration, Instant};
 
+use crate::ime::{self, ImeStatus, TextComposer};
 use crate::input_map::wire_input;
 use crate::wayland_wire::{
-    decode_event, decode_string, next_event, setup_handshake, ObjectIds, DISPLAY_ID,
-    EVENT_OBJECT_ID, WL_CALLBACK_DONE, WL_DISPLAY_ERROR_EVENT, WL_REGISTRY_GLOBAL,
+    decode_event, decode_string, encode_registry_bind, next_event, setup_handshake, ObjectIds,
+    DISPLAY_ID, EVENT_OBJECT_ID, WL_CALLBACK_DONE, WL_DISPLAY_ERROR_EVENT, WL_REGISTRY_GLOBAL,
 };
 use crate::{AdapterError, InputEvent, WAYLAND_DISPLAY_ENV};
 
@@ -155,6 +156,14 @@ pub struct WaylandHost {
     events: VecDeque<InputEvent>,
     /// The pointer stream's press bracket: true from `Press` to `Release`.
     pressed: bool,
+    /// `(name, version)` of the first announced `wl_seat`, if any.
+    seat_global: Option<(u32, u32)>,
+    /// `(name, version)` of the text-input manager global, if any.
+    text_manager: Option<(u32, u32)>,
+    /// The live `zwp_text_input_v3` object, or 0 while unbound.
+    text_id: u32,
+    composer: TextComposer,
+    ime_status: Option<ImeStatus>,
 }
 
 impl WaylandHost {
@@ -186,6 +195,11 @@ impl WaylandHost {
             buffer: Vec::new(),
             events: VecDeque::new(),
             pressed: false,
+            seat_global: None,
+            text_manager: None,
+            text_id: 0,
+            composer: TextComposer::default(),
+            ime_status: None,
         })
     }
 
@@ -208,7 +222,30 @@ impl WaylandHost {
                     if body.len() < 4 {
                         return Err(AdapterError::Backend(WAYLAND_HANDSHAKE_ERROR));
                     }
-                    let (interface, _) = decode_string(&body[4..])?;
+                    let name = u32::from_ne_bytes([body[0], body[1], body[2], body[3]]);
+                    let (interface, used) = decode_string(&body[4..])?;
+                    let version_at = 4 + used;
+                    let version = if body.len() >= version_at + 4 {
+                        u32::from_ne_bytes([
+                            body[version_at],
+                            body[version_at + 1],
+                            body[version_at + 2],
+                            body[version_at + 3],
+                        ])
+                    } else {
+                        0
+                    };
+                    // The text-input half needs the seat and the manager by
+                    // name and version to bind them after the handshake.
+                    match interface {
+                        "wl_seat" if self.seat_global.is_none() => {
+                            self.seat_global = Some((name, version));
+                        }
+                        "zwp_text_input_manager_v3" if self.text_manager.is_none() => {
+                            self.text_manager = Some((name, version));
+                        }
+                        _ => {}
+                    }
                     report.globals.push(interface.to_string());
                 } else if header.object_id == setup.callback_id && header.opcode == WL_CALLBACK_DONE
                 {
@@ -247,11 +284,19 @@ impl WaylandHost {
         Self::read_more(self.fd, &mut self.buffer)?;
         let mut queued = 0usize;
         let mut offset = 0usize;
-        while let Some((header, _, size)) = next_event(&self.buffer[offset..])? {
+        while let Some((header, body, size)) = next_event(&self.buffer[offset..])? {
             if header.object_id == DISPLAY_ID && header.opcode == WL_DISPLAY_ERROR_EVENT {
                 return Err(AdapterError::Backend(WAYLAND_DISPLAY_ERROR));
             }
-            if header.object_id == EVENT_OBJECT_ID {
+            if header.object_id == self.text_id && self.text_id != 0 {
+                if let Some(text) = self.composer.feed(header.opcode, body)? {
+                    self.events.push_back(InputEvent::Input {
+                        node_id: u32::MAX,
+                        text,
+                    });
+                    queued += 1;
+                }
+            } else if header.object_id == EVENT_OBJECT_ID {
                 let (frame, _) = decode_event(&self.buffer[offset..])?
                     .ok_or(AdapterError::Backend(WAYLAND_INPUT_ERROR))?;
                 let (input, pressed) = wire_input(frame, self.pressed);
@@ -273,6 +318,58 @@ impl WaylandHost {
     /// block.
     pub fn poll_input(&mut self) -> Option<InputEvent> {
         self.events.pop_front()
+    }
+
+    /// Probe and arm the text-input half on the first call: bind the announced
+    /// `wl_seat` and `zwp_text_input_manager_v3`, create the text input and
+    /// send the enable/commit pair. Later calls report the stored status; a
+    /// compositor that announces neither global degrades with a typed reason.
+    ///
+    /// shortcut: committed text only arrives while a surface holds keyboard
+    /// focus, which 0.1.0's host does not create yet — the mapping is live
+    /// from here, and the events begin with the surface work.
+    pub fn ime(&mut self) -> Result<ImeStatus, AdapterError> {
+        if let Some(status) = self.ime_status {
+            return Ok(status);
+        }
+        let status = self.arm_ime()?;
+        self.ime_status = Some(status);
+        Ok(status)
+    }
+
+    fn arm_ime(&mut self) -> Result<ImeStatus, AdapterError> {
+        let Some((seat_name, seat_version)) = self.seat_global else {
+            return Ok(ImeStatus::Unavailable(
+                "the compositor does not announce wl_seat",
+            ));
+        };
+        let Some((manager_name, manager_version)) = self.text_manager else {
+            return Ok(ImeStatus::Unavailable(
+                "the compositor does not announce zwp_text_input_manager_v3",
+            ));
+        };
+        let seat_id = self.ids.allocate()?;
+        let manager_id = self.ids.allocate()?;
+        let text_id = self.ids.allocate()?;
+        let mut bytes = encode_registry_bind(
+            self.registry_id,
+            seat_name,
+            "wl_seat",
+            seat_version,
+            seat_id,
+        )?;
+        bytes.extend(encode_registry_bind(
+            self.registry_id,
+            manager_name,
+            "zwp_text_input_manager_v3",
+            manager_version,
+            manager_id,
+        )?);
+        bytes.extend(ime::encode_get_text_input(manager_id, text_id, seat_id)?);
+        bytes.extend(ime::encode_enable_commit(text_id)?);
+        self.write_all(&bytes)?;
+        self.text_id = text_id;
+        Ok(ImeStatus::Ready)
     }
 
     fn write_all(&self, bytes: &[u8]) -> Result<(), AdapterError> {

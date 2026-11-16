@@ -147,7 +147,9 @@ renders a real frame. The mobile and handheld rows have no adapter and stay
 | `global_hotkey::HotkeyHost` | register/trigger/unregister contract with a named `Modifiers`+`Key` chord model and `parse_chord`; `HeadlessHotkey` reference + real macOS Carbon `RegisterEventHotKey` and Windows `RegisterHotKey` adapters |
 | `filesystem::scan_library` | host-independent recursive audio scanner (sorted, depth-capped) with real ID3v2.3/2.4 and FLAC `VORBIS_COMMENT`+`STREAMINFO` metadata parsing |
 | `audio::AudioHost` / `Transport` | pure platform-shared playback state machine (play/pause/seek/volume/repeat/tick) + real macOS `AVAudioPlayer` adapter; targets with no backend keep the pure `Transport` (documented degradation) |
-| `desktop_support()` | the four desktop capability rows (`tray`, `global_hotkey`, `filesystem`, `audio`) with a per-build `Native`/`Headless`/`Unavailable` status; `--desktop` prints it |
+| `desktop_support()` | the desktop capability rows (`tray`, `global_hotkey`, `filesystem`, `audio`, `storage`, `crypto`, `socket`, `notification`, `ime`) with a per-build `Native`/`Headless`/`Unavailable` status; `--desktop` prints it |
+| `input_map` / `ime` | pure window-event and IME mapping rules (pointer stream, wheel notches, UTF-16 assembly, Wayland text-input framing and its double-buffered `done` application), testable on every host |
+| `ImeStatus` / per-host `ime()` | per-window readiness for composed text: `Ready` or a typed `Unavailable` reason; Win32 probes the input-method context, X11 the live XIM/XIC pair, Wayland the announced text-input globals |
 
 ### Headless reference adapter
 
@@ -605,14 +607,19 @@ three times before the headless fallback takes over.
   `TranslateMessage` / `DispatchMessageW`. `present()` converts RGBA8 to the
   BGRA byte order of a top-down 32-bit `BI_RGB` DIB; `WM_PAINT` calls
   `StretchDIBits`. `WM_DESTROY` calls `PostQuitMessage`. Key, tap, pointer
-  move/up and wheel messages become `InputEvent`s. The shortcut is one window
-  per process.
+  move/up and wheel messages become `InputEvent`s. Text arrives through
+  `WM_CHAR` (surrogate pairs assembled into one `Input`) and
+  `WM_IME_COMPOSITION` result strings, with readiness probed from the window's
+  input-method context. The shortcut is one window per process.
 - `X11Host::open()` dynamically resolves and calls `XOpenDisplay`,
   `XCreateSimpleWindow`, `XMapWindow`, `XSelectInput` and `XFlush`;
   `present()` packs RGBA8 through the TrueColor visual masks into an
   `XCreateImage` DIB and draws it with `XPutImage`. `pump()` / `run()` use
-  `XNextEvent` over key, button, wheel, motion, expose and configure events,
-  and `close()` uses `XFreeGC`, `XDestroyWindow` and
+  `XNextEvent` over key, button, wheel, motion, expose and configure events;
+  XIM composes `Xutf8LookupString` results into `Input` beside the raw keys
+  (`XIMPreeditNothing | XIMStatusNothing`), and a refusing locale or input
+  method degrades to raw keys with a typed status. `close()` uses `XFreeGC`,
+  `XDestroyWindow` and
   `XCloseDisplay`. Symbols come from `dlopen`/`dlsym` at runtime only when a
   window is opened, so the default Linux build has no `-lX11` link requirement
   and needs no X11 headers. A missing `libX11.so.6` returns
@@ -628,7 +635,11 @@ three times before the headless fallback takes over.
   compositor's socket and collects the announced globals and the sync
   callback. `pump_input()` then reads the socket and maps the event object's
   press, release, move and resize frames into `InputEvent`s - a move inside a
-  press bracket is a drag - and `poll_input()` drains them FIFO. A missing
+  press bracket is a drag - and `poll_input()` drains them FIFO. `ime()` binds
+  the announced `wl_seat` and `zwp_text_input_manager_v3`, arms the text input
+  with an enable/commit pair and maps committed strings to `Input` at `done`; a
+  compositor announcing neither global degrades with a typed reason, and
+  committed text starts once a focused surface exists. A missing
   `libwayland-client.so.0` returns
   `Wayland unavailable: dlopen(...) failed`; a missing symbol returns
   `Wayland unavailable: libwayland-client is missing a required symbol`.

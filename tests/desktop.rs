@@ -298,6 +298,7 @@ fn desktop_matrix_names_every_capability_once() {
             "crypto",
             "filesystem",
             "global_hotkey",
+            "ime",
             "notification",
             "socket",
             "storage",
@@ -327,6 +328,18 @@ fn desktop_matrix_names_every_capability_once() {
         DesktopStatus::Headless
     };
     assert_eq!(notification.status, expected_status);
+    // Text composition is produced by Windows and Linux hosts in 0.1.0;
+    // macOS has no AppKit text-input client yet and degrades to raw keys.
+    let ime = matrix
+        .iter()
+        .find(|s| s.capability == DesktopCapability::Ime)
+        .unwrap();
+    let expected_ime = if cfg!(target_os = "macos") {
+        DesktopStatus::Unavailable
+    } else {
+        DesktopStatus::Native
+    };
+    assert_eq!(ime.status, expected_ime);
 }
 
 // ---------------------------------------------------------------- macOS live

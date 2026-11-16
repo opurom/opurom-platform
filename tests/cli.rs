@@ -50,7 +50,7 @@ fn desktop_flag_prints_every_capability_row() {
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines[0], "capability | status");
     // Header plus one row per DesktopCapability, notification included.
-    assert_eq!(lines.len(), 9, "header + exactly 8 capability rows");
+    assert_eq!(lines.len(), 10, "header + exactly 9 capability rows");
     let notification = lines
         .iter()
         .find(|line| line.starts_with("notification | "))

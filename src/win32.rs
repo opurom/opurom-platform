@@ -12,19 +12,25 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use windows_sys::w;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows_sys::Win32::Globalization::HIMC;
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, EndPaint, InvalidateRect, ScreenToClient, StretchDIBits, UpdateWindow, BITMAPINFO,
     BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HDC, PAINTSTRUCT, RGBQUAD, SRCCOPY,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::SystemServices::MK_LBUTTON;
+use windows_sys::Win32::UI::Input::Ime::{
+    ImmGetCompositionStringW, ImmGetContext, ImmReleaseContext,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW, LoadCursorW,
     PostQuitMessage, RegisterClassW, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
-    CW_USEDEFAULT, IDC_ARROW, MSG, SW_SHOW, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    CW_USEDEFAULT, IDC_ARROW, MSG, SW_SHOW, WM_CHAR, WM_DESTROY, WM_IME_COMPOSITION, WM_KEYDOWN,
+    WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SIZE,
+    WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
+use crate::ime::{self, ImeStatus};
 use crate::input_map;
 use crate::{AdapterError, Capabilities, FrameView, InputEvent, Lifecycle, PlatformAdapter, Size};
 
@@ -39,6 +45,8 @@ struct Win32State {
     height: u32,
     bgra: Vec<u8>,
     events: Vec<InputEvent>,
+    /// A `WM_CHAR` high surrogate waiting for its low half.
+    pending_char: Option<u16>,
 }
 
 impl Win32State {
@@ -48,6 +56,7 @@ impl Win32State {
             height: 0,
             bgra: Vec::new(),
             events: Vec::new(),
+            pending_char: None,
         }
     }
 }
@@ -61,6 +70,54 @@ fn state() -> Result<MutexGuard<'static, Win32State>, AdapterError> {
 fn push_event(event: InputEvent) {
     if let Ok(mut state) = STATE.lock() {
         state.events.push(event);
+    }
+}
+
+/// One UTF-16 unit of `WM_CHAR`: pairs assemble into one `Input` through
+/// [`ime::utf16_push`], a lone unit becomes text as soon as it can.
+/// shortcut: an input method may echo its committed result through both
+/// `WM_IME_COMPOSITION` and `WM_CHAR`; the host cannot tell the two apart,
+/// so deduping that echo is the consumer's state machine.
+fn push_char(unit: u16) {
+    if let Ok(mut state) = STATE.lock() {
+        if let Some(text) = ime::utf16_push(&mut state.pending_char, unit) {
+            state.events.push(InputEvent::Input {
+                node_id: u32::MAX,
+                text,
+            });
+        }
+    }
+}
+
+/// Read the committed result string of one `WM_IME_COMPOSITION`. The input
+/// method's context is borrowed, never owned, and released before returning.
+fn push_composition(hwnd: HWND) {
+    unsafe {
+        let himc: HIMC = ImmGetContext(hwnd);
+        if himc == 0 {
+            return;
+        }
+        let needed = ImmGetCompositionStringW(himc, ime::RESULT_STRING, std::ptr::null_mut(), 0);
+        if needed > 0 {
+            let mut units = vec![0u16; (needed as usize).div_ceil(2)];
+            let read = ImmGetCompositionStringW(
+                himc,
+                ime::RESULT_STRING,
+                units.as_mut_ptr().cast::<c_void>(),
+                (units.len() * 2) as u32,
+            );
+            if read > 0 {
+                units.truncate((read as usize) / 2);
+                let text = String::from_utf16_lossy(&units);
+                if !text.is_empty() {
+                    push_event(InputEvent::Input {
+                        node_id: u32::MAX,
+                        text,
+                    });
+                }
+            }
+        }
+        ImmReleaseContext(hwnd, himc);
     }
 }
 
@@ -265,6 +322,17 @@ unsafe extern "system" fn window_proc(
             });
             0
         }
+        WM_CHAR => {
+            push_char(wparam as u16);
+            0
+        }
+        WM_IME_COMPOSITION => {
+            if ime::ime_result(lparam as u32) {
+                push_composition(hwnd);
+            }
+            // The input method's own defaults keep running for its windows.
+            DefWindowProcW(hwnd, message, wparam, lparam)
+        }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),
     }
 }
@@ -274,6 +342,7 @@ unsafe extern "system" fn window_proc(
 pub struct Win32Host {
     hwnd: HWND,
     viewport: Size,
+    ime: ImeStatus,
 }
 
 impl Win32Host {
@@ -312,6 +381,18 @@ impl Win32Host {
             state.bgra.clear();
             state.events.clear();
         }
+        let ime = unsafe {
+            let himc = ImmGetContext(hwnd);
+            let ready = himc != 0;
+            if ready {
+                ImmReleaseContext(hwnd, himc);
+            }
+            if ready {
+                ImeStatus::Ready
+            } else {
+                ImeStatus::Unavailable("the window has no input-method context")
+            }
+        };
         unsafe {
             ShowWindow(hwnd, SW_SHOW);
             UpdateWindow(hwnd);
@@ -319,7 +400,14 @@ impl Win32Host {
         Ok(Self {
             hwnd,
             viewport: Size { width, height },
+            ime,
         })
+    }
+
+    /// Whether this window can compose text through the input method, probed
+    /// at open time from the window's input-method context.
+    pub fn ime(&self) -> ImeStatus {
+        self.ime
     }
 
     /// Run until `WM_DESTROY` posts `WM_QUIT`.
