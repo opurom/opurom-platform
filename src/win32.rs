@@ -6,6 +6,7 @@
 //! layout expected by a 32-bit `BI_RGB` DIB and presents it with
 //! `StretchDIBits`.
 
+use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -36,10 +37,12 @@ use crate::input_map;
 use crate::{AdapterError, Capabilities, FrameView, InputEvent, Lifecycle, PlatformAdapter, Size};
 
 const INVALID_STATE: &str = "Win32 state mutex is poisoned";
+const WINDOW_DESTROYED: &str = "the window was destroyed";
 
-// shortcut: one window per process; use per-HWND state for multi-window.
 static CLASS: OnceLock<u16> = OnceLock::new();
-static STATE: Mutex<Win32State> = Mutex::new(Win32State::new());
+/// Per-window state, routed by `HWND` from the single message pump: one pump
+/// serves every window of the process, single- or multi-window alike.
+static WINDOWS: Mutex<BTreeMap<HWND, Win32State>> = Mutex::new(BTreeMap::new());
 
 struct Win32State {
     width: u32,
@@ -65,15 +68,17 @@ impl Win32State {
     }
 }
 
-fn state() -> Result<MutexGuard<'static, Win32State>, AdapterError> {
-    STATE
+fn windows() -> Result<MutexGuard<'static, BTreeMap<HWND, Win32State>>, AdapterError> {
+    WINDOWS
         .lock()
         .map_err(|_| AdapterError::Backend(INVALID_STATE))
 }
 
-fn push_event(event: InputEvent) {
-    if let Ok(mut state) = STATE.lock() {
-        state.events.push(event);
+fn push_event(hwnd: HWND, event: InputEvent) {
+    if let Ok(mut windows) = WINDOWS.lock() {
+        if let Some(state) = windows.get_mut(&hwnd) {
+            state.events.push(event);
+        }
     }
 }
 
@@ -82,19 +87,22 @@ fn push_event(event: InputEvent) {
 /// shortcut: an input method may echo its committed result through both
 /// `WM_IME_COMPOSITION` and `WM_CHAR`; the host cannot tell the two apart,
 /// so deduping that echo is the consumer's state machine.
-fn push_char(unit: u16) {
-    if let Ok(mut state) = STATE.lock() {
-        if let Some(text) = ime::utf16_push(&mut state.pending_char, unit) {
-            state.events.push(InputEvent::Input {
-                node_id: u32::MAX,
-                text,
-            });
+fn push_char(hwnd: HWND, unit: u16) {
+    if let Ok(mut windows) = WINDOWS.lock() {
+        if let Some(state) = windows.get_mut(&hwnd) {
+            if let Some(text) = ime::utf16_push(&mut state.pending_char, unit) {
+                state.events.push(InputEvent::Input {
+                    node_id: u32::MAX,
+                    text,
+                });
+            }
         }
     }
 }
 
 /// Read the committed result string of one `WM_IME_COMPOSITION`. The input
-/// method's context is borrowed, never owned, and released before returning.
+/// method's context is borrowed, never owned; its calls run outside the state
+/// lock and the window state is only touched for the final push.
 fn push_composition(hwnd: HWND) {
     unsafe {
         let himc: HIMC = ImmGetContext(hwnd);
@@ -102,6 +110,7 @@ fn push_composition(hwnd: HWND) {
             return;
         }
         let needed = ImmGetCompositionStringW(himc, ime::RESULT_STRING, std::ptr::null_mut(), 0);
+        let mut text = String::new();
         if needed > 0 {
             let mut units = vec![0u16; (needed as usize).div_ceil(2)];
             let read = ImmGetCompositionStringW(
@@ -112,16 +121,19 @@ fn push_composition(hwnd: HWND) {
             );
             if read > 0 {
                 units.truncate((read as usize) / 2);
-                let text = String::from_utf16_lossy(&units);
-                if !text.is_empty() {
-                    push_event(InputEvent::Input {
-                        node_id: u32::MAX,
-                        text,
-                    });
-                }
+                text = String::from_utf16_lossy(&units);
             }
         }
         ImmReleaseContext(hwnd, himc);
+        if !text.is_empty() {
+            push_event(
+                hwnd,
+                InputEvent::Input {
+                    node_id: u32::MAX,
+                    text,
+                },
+            );
+        }
     }
 }
 
@@ -241,10 +253,11 @@ fn paint(hwnd: HWND) {
         return;
     }
     // Copy while locked, then release the lock before reentrant GDI calls.
-    let snapshot = STATE
-        .lock()
-        .ok()
-        .map(|state| (state.width, state.height, state.bgra.clone()));
+    let snapshot = windows().ok().and_then(|windows| {
+        windows
+            .get(&hwnd)
+            .map(|state| (state.width, state.height, state.bgra.clone()))
+    });
     if let Some((width, height, pixels)) = snapshot {
         if checked_len(width, height).is_ok() && pixels.len() == checked_len(width, height).unwrap()
         {
@@ -266,37 +279,51 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_DESTROY => {
-            push_event(InputEvent::Lifecycle(Lifecycle::Destroyed));
-            PostQuitMessage(0);
+            push_event(hwnd, InputEvent::Lifecycle(Lifecycle::Destroyed));
+            // Quit the pump only when the last window closes, so a
+            // multi-window host keeps serving its survivors.
+            let last = WINDOWS
+                .lock()
+                .map(|windows| windows.len() <= 1)
+                .unwrap_or(false);
+            if last {
+                PostQuitMessage(0);
+            }
             0
         }
         WM_SIZE => {
             let packed = lparam as u32;
             let width = (packed & 0xffff) as u32;
             let height = ((packed >> 16) & 0xffff) as u32;
-            push_event(InputEvent::Resize {
-                size: Size { width, height },
-            });
+            push_event(
+                hwnd,
+                InputEvent::Resize {
+                    size: Size { width, height },
+                },
+            );
             0
         }
         WM_LBUTTONDOWN => {
             let (x, y) = pointer(lparam);
-            push_event(InputEvent::Tap {
-                x,
-                y,
-                node_id: u32::MAX,
-            });
+            push_event(
+                hwnd,
+                InputEvent::Tap {
+                    x,
+                    y,
+                    node_id: u32::MAX,
+                },
+            );
             0
         }
         WM_LBUTTONUP => {
             let (x, y) = pointer(lparam);
-            push_event(InputEvent::PointerUp { x, y });
+            push_event(hwnd, InputEvent::PointerUp { x, y });
             0
         }
         WM_MOUSEMOVE => {
             let (x, y) = pointer(lparam);
             let pressed = (wparam as u32) & MK_LBUTTON != 0;
-            push_event(input_map::pointer_move(pressed, x, y));
+            push_event(hwnd, input_map::pointer_move(pressed, x, y));
             0
         }
         WM_MOUSEWHEEL => {
@@ -311,32 +338,40 @@ unsafe extern "system" fn window_proc(
                 y: ((lparam as u32 >> 16) & 0xffff) as u16 as i16 as i32,
             };
             if delta != 0.0 && ScreenToClient(hwnd, &mut point) != 0 {
-                push_event(InputEvent::Wheel {
-                    x: point.x as f32,
-                    y: point.y as f32,
-                    delta,
-                });
+                push_event(
+                    hwnd,
+                    InputEvent::Wheel {
+                        x: point.x as f32,
+                        y: point.y as f32,
+                        delta,
+                    },
+                );
             }
             0
         }
         WM_KEYDOWN | WM_KEYUP => {
-            push_event(InputEvent::Key {
-                code: wparam as u32,
-                pressed: message == WM_KEYDOWN,
-            });
+            push_event(
+                hwnd,
+                InputEvent::Key {
+                    code: wparam as u32,
+                    pressed: message == WM_KEYDOWN,
+                },
+            );
             0
         }
         WM_CHAR => {
-            push_char(wparam as u16);
+            push_char(hwnd, wparam as u16);
             0
         }
         WM_DPICHANGED => {
             // The X DPI rides the low word of wParam.
             let scale = input_map::dpi_scale((wparam & 0xffff) as u32);
-            if let Ok(mut state) = STATE.lock() {
-                if state.scale != scale {
-                    state.scale = scale;
-                    state.events.push(InputEvent::Scale { scale });
+            if let Ok(mut windows) = WINDOWS.lock() {
+                if let Some(state) = windows.get_mut(&hwnd) {
+                    if state.scale != scale {
+                        state.scale = scale;
+                        state.events.push(InputEvent::Scale { scale });
+                    }
                 }
             }
             // shortcut: the suggested window rect in lParam is not applied;
@@ -394,7 +429,8 @@ impl Win32Host {
         }
         let scale = input_map::dpi_scale(unsafe { GetDpiForWindow(hwnd) });
         {
-            let mut state = state()?;
+            let mut windows = windows()?;
+            let state = windows.entry(hwnd).or_insert_with(Win32State::new);
             state.width = width;
             state.height = height;
             state.bgra.clear();
@@ -403,7 +439,7 @@ impl Win32Host {
         }
         // The ABI's degradation for platforms without scale events: one Scale
         // at window build. Windows follows with WM_DPICHANGED.
-        push_event(InputEvent::Scale { scale });
+        push_event(hwnd, InputEvent::Scale { scale });
         let ime = unsafe {
             let himc = ImmGetContext(hwnd);
             let ready = himc != 0;
@@ -435,19 +471,25 @@ impl Win32Host {
 
     /// Run until `WM_DESTROY` posts `WM_QUIT`.
     pub fn run(&mut self) -> Result<(), AdapterError> {
-        let mut message: MSG = unsafe { std::mem::zeroed() };
-        loop {
-            let status = unsafe { GetMessageW(&mut message, 0, 0, 0) };
-            if status == 0 {
-                return Ok(());
-            }
-            if status == -1 {
-                return Err(AdapterError::Backend("GetMessageW failed"));
-            }
-            unsafe {
-                TranslateMessage(&message);
-                DispatchMessageW(&message);
-            }
+        run_message_pump()
+    }
+}
+
+/// Pump messages until `WM_DESTROY` posts `WM_QUIT` from the last window.
+/// One pump serves every window of the process.
+fn run_message_pump() -> Result<(), AdapterError> {
+    let mut message: MSG = unsafe { std::mem::zeroed() };
+    loop {
+        let status = unsafe { GetMessageW(&mut message, 0, 0, 0) };
+        if status == 0 {
+            return Ok(());
+        }
+        if status == -1 {
+            return Err(AdapterError::Backend("GetMessageW failed"));
+        }
+        unsafe {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
         }
     }
 }
@@ -463,7 +505,10 @@ impl PlatformAdapter for Win32Host {
             native_embed: false,
             multi_window: false,
             lifecycle: true,
-            dpi_scale: state().map(|state| state.scale).unwrap_or(1.0),
+            dpi_scale: windows()
+                .ok()
+                .and_then(|windows| windows.get(&self.hwnd).map(|state| state.scale))
+                .unwrap_or(1.0),
         }
     }
 
@@ -472,7 +517,8 @@ impl PlatformAdapter for Win32Host {
     }
 
     fn poll_event(&mut self) -> Option<InputEvent> {
-        let mut state = state().ok()?;
+        let mut windows = windows().ok()?;
+        let state = windows.get_mut(&self.hwnd)?;
         if state.events.is_empty() {
             return None;
         }
@@ -487,7 +533,10 @@ impl PlatformAdapter for Win32Host {
         validate_frame(frame)?;
         let bgra = rgba_to_bgra(frame.pixels);
         {
-            let mut state = state()?;
+            let mut windows = windows()?;
+            let state = windows
+                .get_mut(&self.hwnd)
+                .ok_or(AdapterError::Backend(WINDOW_DESTROYED))?;
             state.width = frame.width;
             state.height = frame.height;
             state.bgra = bgra;
@@ -506,8 +555,202 @@ impl Drop for Win32Host {
     fn drop(&mut self) {
         if self.hwnd != 0 {
             unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(self.hwnd) };
+            let _ = windows().map(|mut windows| windows.remove(&self.hwnd));
             self.hwnd = 0;
         }
+    }
+}
+
+/// A real multi-window Win32 host: 2..4 independent windows served by one
+/// message pump and routed by `HWND`, with the `WindowSet` model's index,
+/// broadcast and per-window present shape. `multi_window` reports true.
+///
+/// shortcut: compiled and unit-tested for the Windows target only, never
+/// executed here; the routing rules mirror the single-window pump exactly.
+pub struct Win32MultiHost {
+    hwnds: Vec<HWND>,
+    viewports: Vec<Size>,
+}
+
+impl Win32MultiHost {
+    /// Open 2..4 real windows, one per size, in index order.
+    pub fn open<const N: usize>(sizes: [Size; N]) -> Result<Self, AdapterError> {
+        if !(2..=4).contains(&N) {
+            return Err(AdapterError::Backend(
+                crate::window_set::INVALID_WINDOW_COUNT,
+            ));
+        }
+        if *CLASS.get_or_init(register_class) == 0 {
+            return Err(AdapterError::Backend("RegisterClassW failed"));
+        }
+        let module = unsafe { GetModuleHandleW(std::ptr::null()) };
+        if module == 0 {
+            return Err(AdapterError::Backend("GetModuleHandleW failed"));
+        }
+        let mut hwnds = Vec::new();
+        let mut viewports = Vec::new();
+        let opened = (|| -> Result<(), AdapterError> {
+            for size in sizes {
+                checked_len(size.width, size.height)?;
+                let hwnd = unsafe {
+                    CreateWindowExW(
+                        0,
+                        w!("OpuromWindow"),
+                        w!("Opurom Window"),
+                        WS_OVERLAPPEDWINDOW,
+                        CW_USEDEFAULT,
+                        CW_USEDEFAULT,
+                        size.width as i32,
+                        size.height as i32,
+                        0,
+                        0,
+                        module,
+                        std::ptr::null(),
+                    )
+                };
+                if hwnd == 0 {
+                    return Err(AdapterError::Backend("CreateWindowExW failed"));
+                }
+                let scale = input_map::dpi_scale(unsafe { GetDpiForWindow(hwnd) });
+                {
+                    let mut windows = windows()?;
+                    let state = windows.entry(hwnd).or_insert_with(Win32State::new);
+                    state.width = size.width;
+                    state.height = size.height;
+                    state.bgra.clear();
+                    state.events.clear();
+                    state.scale = scale;
+                }
+                // The build-time Scale, once per window.
+                push_event(hwnd, InputEvent::Scale { scale });
+                unsafe {
+                    ShowWindow(hwnd, SW_SHOW);
+                }
+                hwnds.push(hwnd);
+                viewports.push(size);
+            }
+            Ok(())
+        })();
+        if let Err(error) = opened {
+            // Destroy what was created so no window outlives a failed open.
+            for hwnd in &hwnds {
+                unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(*hwnd) };
+                let _ = windows().map(|mut windows| windows.remove(hwnd));
+            }
+            return Err(error);
+        }
+        Ok(Self { hwnds, viewports })
+    }
+
+    pub fn len(&self) -> usize {
+        self.hwnds.len()
+    }
+
+    /// Raw framebuffer size of every window in index order.
+    pub fn viewports(&self) -> Vec<Size> {
+        self.viewports.clone()
+    }
+
+    fn hwnd(&self, index: usize) -> Result<HWND, AdapterError> {
+        self.hwnds.get(index).copied().ok_or(AdapterError::Backend(
+            crate::window_set::INVALID_WINDOW_INDEX,
+        ))
+    }
+
+    /// Deliver the same normalized input to every window, mirroring
+    /// [`crate::window_set::WindowSet::broadcast_event`].
+    pub fn broadcast_event(&mut self, event: InputEvent) {
+        for hwnd in &self.hwnds {
+            push_event(*hwnd, event.clone());
+        }
+    }
+
+    pub fn push_event(&mut self, index: usize, event: InputEvent) -> Result<(), AdapterError> {
+        let hwnd = self.hwnd(index)?;
+        push_event(hwnd, event);
+        Ok(())
+    }
+
+    pub fn viewport(&self, index: usize) -> Result<Size, AdapterError> {
+        self.hwnd(index)?;
+        self.viewports
+            .get(index)
+            .copied()
+            .ok_or(AdapterError::Backend(
+                crate::window_set::INVALID_WINDOW_INDEX,
+            ))
+    }
+
+    pub fn poll_event(&mut self, index: usize) -> Result<Option<InputEvent>, AdapterError> {
+        let hwnd = self.hwnd(index)?;
+        let event = {
+            let mut windows = windows()?;
+            let state = windows
+                .get_mut(&hwnd)
+                .ok_or(AdapterError::Backend(WINDOW_DESTROYED))?;
+            if state.events.is_empty() {
+                return Ok(None);
+            }
+            state.events.remove(0)
+        };
+        if let InputEvent::Resize { size } = &event {
+            self.viewports[index] = *size;
+        }
+        Ok(Some(event))
+    }
+
+    pub fn present(&mut self, index: usize, frame: FrameView<'_>) -> Result<(), AdapterError> {
+        let hwnd = self.hwnd(index)?;
+        validate_frame(frame)?;
+        let bgra = rgba_to_bgra(frame.pixels);
+        {
+            let mut windows = windows()?;
+            let state = windows
+                .get_mut(&hwnd)
+                .ok_or(AdapterError::Backend(WINDOW_DESTROYED))?;
+            state.width = frame.width;
+            state.height = frame.height;
+            state.bgra = bgra;
+        }
+        if unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) } == 0 {
+            return Err(AdapterError::Backend("InvalidateRect failed"));
+        }
+        if unsafe { UpdateWindow(hwnd) } == 0 {
+            return Err(AdapterError::Backend("UpdateWindow failed"));
+        }
+        Ok(())
+    }
+
+    /// Run the shared message pump until the last window closes.
+    pub fn run(&mut self) -> Result<(), AdapterError> {
+        run_message_pump()
+    }
+
+    pub fn capabilities(&self) -> Capabilities {
+        let dpi_scale = windows()
+            .ok()
+            .and_then(|windows| {
+                let hwnd = *self.hwnds.first()?;
+                windows.get(&hwnd).map(|state| state.scale)
+            })
+            .unwrap_or(1.0);
+        Capabilities {
+            gpu: false,
+            native_embed: false,
+            multi_window: true,
+            lifecycle: true,
+            dpi_scale,
+        }
+    }
+}
+
+impl Drop for Win32MultiHost {
+    fn drop(&mut self) {
+        for hwnd in &self.hwnds {
+            unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(*hwnd) };
+            let _ = windows().map(|mut windows| windows.remove(hwnd));
+        }
+        self.hwnds.clear();
     }
 }
 

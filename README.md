@@ -613,6 +613,12 @@ three times before the headless fallback takes over.
   input-method context. `WM_DPICHANGED` and the window's device DPI drive the
   `Scale` channel and `capabilities().dpi_scale`. The shortcut is one window
   per process.
+- `Win32MultiHost::open()` registers the same class and opens 2..4 real
+  windows served by one message pump, routed by `HWND` through the per-window
+  state map; `poll_event`/`present(index)` mirror the `WindowSet` model's
+  index shape and `broadcast_event` reaches every window. `WM_DESTROY` quits
+  the pump only from the last surviving window. The routing is compile-verified
+  for the Windows target; this repository executes no Windows binary.
 - `X11Host::open()` dynamically resolves and calls `XOpenDisplay`,
   `XCreateSimpleWindow`, `XMapWindow`, `XSelectInput` and `XFlush`;
   `present()` packs RGBA8 through the TrueColor visual masks into an

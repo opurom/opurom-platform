@@ -111,7 +111,7 @@ pub use appkit::{
 #[cfg(target_os = "linux")]
 pub use wayland::{Handshake, WaylandHost};
 #[cfg(target_os = "windows")]
-pub use win32::Win32Host;
+pub use win32::{Win32Host, Win32MultiHost};
 #[cfg(target_os = "linux")]
 pub use x11::X11Host;
 

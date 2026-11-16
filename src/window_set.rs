@@ -5,8 +5,8 @@ use crate::{
     AdapterError, FrameView, Headless, InputEvent, LayoutPatch, PlatformAdapter, Rect, Size,
 };
 
-const INVALID_WINDOW_INDEX: &str = "invalid window index";
-const INVALID_WINDOW_COUNT: &str = "WindowSet requires 2..4 viewports";
+pub(crate) const INVALID_WINDOW_INDEX: &str = "invalid window index";
+pub(crate) const INVALID_WINDOW_COUNT: &str = "WindowSet requires 2..4 viewports";
 
 /// Independent viewports, each backed by its own `Headless` event FIFO and
 /// RGBA8 frame buffer.
