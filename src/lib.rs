@@ -135,7 +135,10 @@ pub struct FrameView<'a> {
 /// The pointer stream reads as `Tap` (press) → `PointerMove`/`PointerDrag`
 /// (motion with no button held / with one held) → `PointerUp` (release);
 /// `Wheel` is one scroll notch at the pointer with `delta` normalized so
-/// `1.0` is one notch away from the user (scrolled up).
+/// `1.0` is one notch away from the user (scrolled up). `Scale` reports a
+/// window's content scale change (HiDPI moves across screens); adapters
+/// whose platform exposes no scale event emit it once at window creation
+/// and never again.
 #[derive(Clone, Debug, PartialEq)]
 pub enum InputEvent {
     Tap { x: f32, y: f32, node_id: u32 },
@@ -146,6 +149,7 @@ pub enum InputEvent {
     Input { node_id: u32, text: String },
     Key { code: u32, pressed: bool },
     Resize { size: Size },
+    Scale { scale: f32 },
     Lifecycle(Lifecycle),
 }
 

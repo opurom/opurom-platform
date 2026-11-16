@@ -17,8 +17,9 @@ use std::time::{Duration, Instant};
 use crate::ime::{self, ImeStatus, TextComposer};
 use crate::input_map::wire_input;
 use crate::wayland_wire::{
-    decode_event, decode_string, encode_registry_bind, next_event, setup_handshake, ObjectIds,
-    DISPLAY_ID, EVENT_OBJECT_ID, WL_CALLBACK_DONE, WL_DISPLAY_ERROR_EVENT, WL_REGISTRY_GLOBAL,
+    decode_event, decode_output_scale, decode_string, encode_registry_bind, next_event,
+    setup_handshake, ObjectIds, DISPLAY_ID, EVENT_OBJECT_ID, WL_CALLBACK_DONE,
+    WL_DISPLAY_ERROR_EVENT, WL_OUTPUT_DONE, WL_OUTPUT_SCALE, WL_REGISTRY_GLOBAL,
 };
 use crate::{AdapterError, InputEvent, WAYLAND_DISPLAY_ENV};
 
@@ -164,6 +165,14 @@ pub struct WaylandHost {
     text_id: u32,
     composer: TextComposer,
     ime_status: Option<ImeStatus>,
+    /// `(name, version)` of the first announced `wl_output`, if any.
+    output_global: Option<(u32, u32)>,
+    /// The bound output object, or 0 while unbound.
+    output_id: u32,
+    /// The output scale applied to the stream, once known.
+    scale_applied: Option<f32>,
+    /// A scale event awaiting its `done` frame.
+    scale_pending: Option<f32>,
 }
 
 impl WaylandHost {
@@ -200,6 +209,10 @@ impl WaylandHost {
             text_id: 0,
             composer: TextComposer::default(),
             ime_status: None,
+            output_global: None,
+            output_id: 0,
+            scale_applied: None,
+            scale_pending: None,
         })
     }
 
@@ -243,6 +256,9 @@ impl WaylandHost {
                         }
                         "zwp_text_input_manager_v3" if self.text_manager.is_none() => {
                             self.text_manager = Some((name, version));
+                        }
+                        "wl_output" if self.output_global.is_none() => {
+                            self.output_global = Some((name, version));
                         }
                         _ => {}
                     }
@@ -295,6 +311,25 @@ impl WaylandHost {
                         text,
                     });
                     queued += 1;
+                }
+            } else if header.object_id == self.output_id && self.output_id != 0 {
+                match header.opcode {
+                    WL_OUTPUT_SCALE => {
+                        self.scale_pending = Some(decode_output_scale(body)? as f32);
+                    }
+                    WL_OUTPUT_DONE => {
+                        if self.scale_pending.is_some() && self.scale_pending != self.scale_applied
+                        {
+                            self.scale_applied = self.scale_pending;
+                            if let Some(scale) = self.scale_applied {
+                                self.events.push_back(InputEvent::Scale { scale });
+                                queued += 1;
+                            }
+                        }
+                    }
+                    // geometry/mode and the v2 name/description frames carry
+                    // nothing the ABI's scale channel needs.
+                    _ => {}
                 }
             } else if header.object_id == EVENT_OBJECT_ID {
                 let (frame, _) = decode_event(&self.buffer[offset..])?
@@ -370,6 +405,35 @@ impl WaylandHost {
         self.write_all(&bytes)?;
         self.text_id = text_id;
         Ok(ImeStatus::Ready)
+    }
+
+    /// Bind the first announced output and report the content scale it
+    /// carries. The value is also queued as `Scale` — once at the first
+    /// bind, then again on every change. No announced output, or a v1
+    /// output without a scale event, degrades per the ABI: one `Scale{1.0}`
+    /// at window build and no further events.
+    ///
+    /// shortcut: a live window follows the scale of the output its surface
+    /// sits on; with no surface yet, the first output stands in.
+    pub fn scale(&mut self) -> Result<f32, AdapterError> {
+        if self.scale_applied.is_none() && self.output_id == 0 {
+            if let Some((name, version)) = self.output_global {
+                let id = self.ids.allocate()?;
+                let bytes = encode_registry_bind(self.registry_id, name, "wl_output", version, id)?;
+                self.write_all(&bytes)?;
+                self.output_id = id;
+            }
+            if self.output_id != 0 {
+                // The output's state (geometry, mode, scale) arrives on bind;
+                // one read normally carries all of it.
+                self.pump_input()?;
+            }
+            if self.scale_applied.is_none() {
+                self.scale_applied = Some(1.0);
+                self.events.push_back(InputEvent::Scale { scale: 1.0 });
+            }
+        }
+        Ok(self.scale_applied.expect("applied above"))
     }
 
     fn write_all(&self, bytes: &[u8]) -> Result<(), AdapterError> {

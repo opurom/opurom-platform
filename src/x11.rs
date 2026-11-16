@@ -224,6 +224,7 @@ type Xutf8LookupStringFn = unsafe extern "C" fn(
     *mut c_long,
     *mut c_int,
 ) -> c_int;
+type XDisplayWidthFn = unsafe extern "C" fn(*mut Display, c_int) -> c_int;
 
 const ZPIXMAP: c_int = 2;
 const TRUE_COLOR: c_int = 4;
@@ -296,6 +297,8 @@ struct Xlib {
     destroy_ic: XDestroyICFn,
     set_ic_focus: XSetICFocusFn,
     utf8_lookup: Xutf8LookupStringFn,
+    display_width: XDisplayWidthFn,
+    display_width_mm: XDisplayWidthFn,
 }
 
 impl Xlib {
@@ -340,6 +343,8 @@ impl Xlib {
             destroy_ic: symbol(handle, b"XDestroyIC\0")?,
             set_ic_focus: symbol(handle, b"XSetICFocus\0")?,
             utf8_lookup: symbol(handle, b"Xutf8LookupString\0")?,
+            display_width: symbol(handle, b"XDisplayWidth\0")?,
+            display_width_mm: symbol(handle, b"XDisplayWidthMM\0")?,
         })
     }
 }
@@ -406,6 +411,7 @@ pub struct X11Host {
     xim: *mut c_void,
     xic: *mut c_void,
     ime: ImeStatus,
+    scale: f32,
     lib: Xlib,
 }
 
@@ -437,6 +443,7 @@ impl X11Host {
             xim: null_mut(),
             xic: null_mut(),
             ime: ImeStatus::Unavailable(XIM_OPEN_ERROR),
+            scale: 1.0,
             lib,
         };
         let screen = unsafe { (host.lib.default_screen)(display) };
@@ -505,6 +512,14 @@ impl X11Host {
             ));
         }
         host.setup_ime();
+        // The ABI's degradation for platforms without scale events: one Scale
+        // at window build, from the screen's physical pixel density.
+        let scale = input_map::dpi_from_millimeters(
+            unsafe { (host.lib.display_width)(display, screen) } as u32,
+            unsafe { (host.lib.display_width_mm)(display, screen) } as u32,
+        );
+        host.scale = scale;
+        host.events.push_back(InputEvent::Scale { scale });
         Ok(host)
     }
 
@@ -780,7 +795,7 @@ impl PlatformAdapter for X11Host {
             native_embed: false,
             multi_window: false,
             lifecycle: true,
-            dpi_scale: 1.0,
+            dpi_scale: self.scale,
         }
     }
 

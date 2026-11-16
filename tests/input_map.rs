@@ -2,7 +2,9 @@
 //! wheel notch normalization and the wire frame stream, the layer every host
 //! can exercise without a window server.
 
-use opurom_platform::input_map::{pointer_move, wheel_delta, wire_input, x11_scroll_notch};
+use opurom_platform::input_map::{
+    dpi_from_millimeters, dpi_scale, pointer_move, wheel_delta, wire_input, x11_scroll_notch,
+};
 use opurom_platform::wayland_wire::{decode_event, WireEvent};
 use opurom_platform::InputEvent;
 
@@ -39,6 +41,24 @@ fn x11_scroll_buttons_map_to_notches_and_nothing_else_does() {
     for button in [1, 2, 3, 6, 7, 8] {
         assert_eq!(x11_scroll_notch(button), None, "button {button}");
     }
+}
+
+// ---------------------------------------------------------------- scale
+
+#[test]
+fn dpi_maps_against_the_96_baseline() {
+    assert_eq!(dpi_scale(96), 1.0);
+    assert_eq!(dpi_scale(144), 1.5);
+    assert_eq!(dpi_scale(192), 2.0);
+}
+
+#[test]
+fn x11_scale_comes_from_the_screen_millimeters() {
+    // A 3840-wide screen reporting 609 mm is 160 DPI: 1.5x content.
+    assert!((dpi_from_millimeters(3840, 609) - 1.666).abs() < 0.01);
+    assert_eq!(dpi_from_millimeters(1920, 508), 1.0);
+    // A screen reporting no physical size degrades to 1.0.
+    assert_eq!(dpi_from_millimeters(1920, 0), 1.0);
 }
 
 // ---------------------------------------------------------------- wire

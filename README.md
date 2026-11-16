@@ -126,7 +126,7 @@ renders a real frame. The mobile and handheld rows have no adapter and stay
 | `WindowMetadata` | deterministic window query: `title` and `dpi_scale`; the `metadata` default derives them from `name()` and `capabilities()` |
 | `FrameView<'a>` | borrowed RGBA8 view `{ width: u32, height: u32, pixels: &'a [u8] }`, defined here so the renderer is not a compile-time dependency of adapters |
 | `Size` | logical viewport `{ width: u32, height: u32 }` |
-| `InputEvent` | `Tap`, `PointerMove`, `PointerDrag`, `PointerUp`, `Wheel`, `Input`, `Key`, `Resize`, `Lifecycle`; logical pixels, top-left origin, `node_id: u32::MAX` when hit-testing is unavailable, wheel `delta` in notches (`1.0` per notch) |
+| `InputEvent` | `Tap`, `PointerMove`, `PointerDrag`, `PointerUp`, `Wheel`, `Input`, `Key`, `Resize`, `Scale`, `Lifecycle`; logical pixels, top-left origin, `node_id: u32::MAX` when hit-testing is unavailable, wheel `delta` in notches (`1.0` per notch); `Scale` reports a content scale change, and platforms without scale events emit it once at window creation |
 | `Capabilities` | `gpu`, `native_embed`, `multi_window`, `lifecycle`, `dpi_scale` |
 | `AdapterError` | `InvalidFrame` (bad RGBA8 length) and `Backend(&'static str)`; always a value, never a panic across the boundary |
 | `Status` | `Verified`, `Scaffold`, `Planned` |
@@ -610,7 +610,9 @@ three times before the headless fallback takes over.
   move/up and wheel messages become `InputEvent`s. Text arrives through
   `WM_CHAR` (surrogate pairs assembled into one `Input`) and
   `WM_IME_COMPOSITION` result strings, with readiness probed from the window's
-  input-method context. The shortcut is one window per process.
+  input-method context. `WM_DPICHANGED` and the window's device DPI drive the
+  `Scale` channel and `capabilities().dpi_scale`. The shortcut is one window
+  per process.
 - `X11Host::open()` dynamically resolves and calls `XOpenDisplay`,
   `XCreateSimpleWindow`, `XMapWindow`, `XSelectInput` and `XFlush`;
   `present()` packs RGBA8 through the TrueColor visual masks into an
@@ -625,7 +627,9 @@ three times before the headless fallback takes over.
   and needs no X11 headers. A missing `libX11.so.6` returns
   `X11 unavailable: dlopen(...) failed`; a missing symbol returns
   `X11 unavailable: libX11 is missing a required Xlib symbol`. A 24/32-bit
-  TrueColor visual is also required at runtime.
+  TrueColor visual is also required at runtime. X11 has no scale event: the
+  screen's physical pixel density stands in, emitted once as `Scale` at
+  window build and reported by `capabilities().dpi_scale`.
 - `WaylandHost::connect()` resolves `wl_display_connect`,
   `wl_display_disconnect`, `wl_display_get_error` and `wl_display_get_fd` from
   `libwayland-client.so.0`/`libwayland-client.so` with `dlopen`/`dlsym` at
@@ -639,7 +643,10 @@ three times before the headless fallback takes over.
   the announced `wl_seat` and `zwp_text_input_manager_v3`, arms the text input
   with an enable/commit pair and maps committed strings to `Input` at `done`; a
   compositor announcing neither global degrades with a typed reason, and
-  committed text starts once a focused surface exists. A missing
+  committed text starts once a focused surface exists. `scale()` binds the
+  first announced `wl_output`, maps its `scale` event (applied at `done`) to
+  the `Scale` channel, and degrades to one `Scale{1.0}` when the output
+  carries no scale. A missing
   `libwayland-client.so.0` returns
   `Wayland unavailable: dlopen(...) failed`; a missing symbol returns
   `Wayland unavailable: libwayland-client is missing a required symbol`.

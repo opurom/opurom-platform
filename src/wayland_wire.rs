@@ -39,6 +39,9 @@ pub const WL_REGISTRY_GLOBAL: u16 = 0;
 pub const WL_CALLBACK_DONE: u16 = 0;
 pub const WL_SHM_CREATE_POOL: u16 = 0;
 pub const WL_SHM_POOL_CREATE_BUFFER: u16 = 0;
+// `wl_output` events: geometry, mode, done, scale, then the v2 names.
+pub const WL_OUTPUT_DONE: u16 = 2;
+pub const WL_OUTPUT_SCALE: u16 = 3;
 
 /// `wl_shm.format`: 32-bit native-endian A:R:G:B 8:8:8:8, four bytes per pixel.
 pub const WL_SHM_FORMAT_ARGB8888: u32 = 0;
@@ -822,6 +825,14 @@ pub fn decode_event(bytes: &[u8]) -> Result<Option<(WireEvent, usize)>, AdapterE
     Ok(Some((event, size)))
 }
 
+/// `wl_output.scale(factor)`: the integer content scale of one output.
+pub fn decode_output_scale(body: &[u8]) -> Result<u32, AdapterError> {
+    if body.len() != 4 {
+        return Err(AdapterError::Backend(BAD_EVENT_BODY));
+    }
+    Ok(u32::from_ne_bytes([body[0], body[1], body[2], body[3]]))
+}
+
 /// Decode a whole batch, refusing more than `limit` events. A batch must end
 /// on a message boundary: trailing partial bytes are an error, not a short read.
 pub fn decode_batch(bytes: &[u8], limit: usize) -> Result<Vec<WireEvent>, AdapterError> {
@@ -846,6 +857,13 @@ pub fn decode_batch(bytes: &[u8], limit: usize) -> Result<Vec<WireEvent>, Adapte
 mod tests {
     use super::*;
     use crate::{host_platforms, spec_by_name, wayland_skip_reason, Status, WAYLAND_DISPLAY_ENV};
+
+    #[test]
+    fn output_scale_decodes_the_factor_word() {
+        assert_eq!(decode_output_scale(&2u32.to_ne_bytes()).unwrap(), 2);
+        assert!(decode_output_scale(&[1, 2, 3]).is_err());
+        assert!(decode_output_scale(&[0u8; 8]).is_err());
+    }
 
     /// Concrete wire bytes on both host byte orders. Wayland integers are
     /// native-endian; string bytes and padding bytes keep their order.

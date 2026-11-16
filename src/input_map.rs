@@ -70,3 +70,22 @@ pub fn wire_input(event: WireEvent, pressed: bool) -> (Option<InputEvent>, bool)
         | WireEvent::GraphicsBackend(_) => (None, pressed),
     }
 }
+
+/// A device DPI value against the ABI's 96 DPI baseline: 96 reports 1.0,
+/// 144 reports 1.5.
+pub fn dpi_scale(dpi: u32) -> f32 {
+    dpi as f32 / 96.0
+}
+
+/// X11 knows its screen only in pixels and millimeters; the physical DPI
+/// (25.4 mm to the inch) stands in for the scale. A screen that reports no
+/// size degrades to 1.0.
+///
+/// shortcut: fractional RandR scaling and its change events need libXrandr
+/// plus buffer-scaled presentation; 0.1.0 emits this one value per window.
+pub fn dpi_from_millimeters(pixels: u32, millimeters: u32) -> f32 {
+    if millimeters == 0 {
+        return 1.0;
+    }
+    (f64::from(pixels) * 25.4 / f64::from(millimeters) / 96.0) as f32
+}

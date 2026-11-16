@@ -19,15 +19,16 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::SystemServices::MK_LBUTTON;
+use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::Ime::{
     ImmGetCompositionStringW, ImmGetContext, ImmReleaseContext,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW, LoadCursorW,
     PostQuitMessage, RegisterClassW, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
-    CW_USEDEFAULT, IDC_ARROW, MSG, SW_SHOW, WM_CHAR, WM_DESTROY, WM_IME_COMPOSITION, WM_KEYDOWN,
-    WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SIZE,
-    WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    CW_USEDEFAULT, IDC_ARROW, MSG, SW_SHOW, WM_CHAR, WM_DESTROY, WM_DPICHANGED, WM_IME_COMPOSITION,
+    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT,
+    WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
 use crate::ime::{self, ImeStatus};
@@ -47,6 +48,8 @@ struct Win32State {
     events: Vec<InputEvent>,
     /// A `WM_CHAR` high surrogate waiting for its low half.
     pending_char: Option<u16>,
+    /// The content scale the window currently renders at.
+    scale: f32,
 }
 
 impl Win32State {
@@ -57,6 +60,7 @@ impl Win32State {
             bgra: Vec::new(),
             events: Vec::new(),
             pending_char: None,
+            scale: 1.0,
         }
     }
 }
@@ -326,6 +330,20 @@ unsafe extern "system" fn window_proc(
             push_char(wparam as u16);
             0
         }
+        WM_DPICHANGED => {
+            // The X DPI rides the low word of wParam.
+            let scale = input_map::dpi_scale((wparam & 0xffff) as u32);
+            if let Ok(mut state) = STATE.lock() {
+                if state.scale != scale {
+                    state.scale = scale;
+                    state.events.push(InputEvent::Scale { scale });
+                }
+            }
+            // shortcut: the suggested window rect in lParam is not applied;
+            // 0.1.0 presents unscaled frames, so the scale is the only DPI
+            // effect here.
+            0
+        }
         WM_IME_COMPOSITION => {
             if ime::ime_result(lparam as u32) {
                 push_composition(hwnd);
@@ -374,13 +392,18 @@ impl Win32Host {
         if hwnd == 0 {
             return Err(AdapterError::Backend("CreateWindowExW failed"));
         }
+        let scale = input_map::dpi_scale(unsafe { GetDpiForWindow(hwnd) });
         {
             let mut state = state()?;
             state.width = width;
             state.height = height;
             state.bgra.clear();
             state.events.clear();
+            state.scale = scale;
         }
+        // The ABI's degradation for platforms without scale events: one Scale
+        // at window build. Windows follows with WM_DPICHANGED.
+        push_event(InputEvent::Scale { scale });
         let ime = unsafe {
             let himc = ImmGetContext(hwnd);
             let ready = himc != 0;
@@ -440,7 +463,7 @@ impl PlatformAdapter for Win32Host {
             native_embed: false,
             multi_window: false,
             lifecycle: true,
-            dpi_scale: 1.0,
+            dpi_scale: state().map(|state| state.scale).unwrap_or(1.0),
         }
     }
 
