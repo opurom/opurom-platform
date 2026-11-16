@@ -291,14 +291,20 @@ fn desktop_matrix_names_every_capability_once() {
     let matrix = desktop_support();
     let mut caps: Vec<&str> = matrix.iter().map(|s| s.capability.as_str()).collect();
     caps.sort();
-    assert_eq!(caps, vec!["audio", "filesystem", "global_hotkey", "tray"]);
-    // The filesystem scanner parses real files everywhere, so it is native on
-    // every build; the other three vary by target.
-    let filesystem = matrix
-        .iter()
-        .find(|s| s.capability == DesktopCapability::Filesystem)
-        .unwrap();
-    assert_eq!(filesystem.status, DesktopStatus::Native);
+    assert_eq!(
+        caps,
+        vec!["audio", "crypto", "filesystem", "global_hotkey", "storage", "tray"]
+    );
+    // The filesystem scanner, storage and crypto parse/serve real data everywhere,
+    // so they are native on every build; tray/hotkey/audio vary by target.
+    for expected in [
+        DesktopCapability::Filesystem,
+        DesktopCapability::Storage,
+        DesktopCapability::Crypto,
+    ] {
+        let row = matrix.iter().find(|s| s.capability == expected).unwrap();
+        assert_eq!(row.status, DesktopStatus::Native);
+    }
 }
 
 // ---------------------------------------------------------------- macOS live

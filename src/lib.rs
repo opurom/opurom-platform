@@ -22,6 +22,7 @@ use std::fmt;
 
 mod a11y;
 pub mod audio;
+pub mod crypto;
 pub mod display_geometry;
 pub mod filesystem;
 pub mod global_hotkey;
@@ -32,6 +33,7 @@ mod headless;
 mod pixel;
 mod png;
 mod ppm;
+pub mod storage;
 mod terminal;
 pub mod tray;
 mod verify;
@@ -563,6 +565,8 @@ pub enum DesktopCapability {
     GlobalHotkey,
     Filesystem,
     Audio,
+    Storage,
+    Crypto,
 }
 
 impl DesktopCapability {
@@ -572,6 +576,8 @@ impl DesktopCapability {
             DesktopCapability::GlobalHotkey => "global_hotkey",
             DesktopCapability::Filesystem => "filesystem",
             DesktopCapability::Audio => "audio",
+            DesktopCapability::Storage => "storage",
+            DesktopCapability::Crypto => "crypto",
         }
     }
 }
@@ -646,6 +652,16 @@ pub fn desktop_support() -> Vec<DesktopSupport> {
         DesktopSupport {
             capability: DesktopCapability::Audio,
             status: audio,
+        },
+        DesktopSupport {
+            capability: DesktopCapability::Storage,
+            // File-backed kv + object store: plain IO, real on every host.
+            status: DesktopStatus::Native,
+        },
+        DesktopSupport {
+            capability: DesktopCapability::Crypto,
+            // AES-256-GCM / SHA-256 / system random from ring: real on every host.
+            status: DesktopStatus::Native,
         },
     ]
 }

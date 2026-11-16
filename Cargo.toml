@@ -6,6 +6,8 @@ description = "Opurom platform adapter ABI, capability registry and host adapter
 
 [dependencies]
 png = "0.17.16"
+sha2 = "0.10.9"
+ring = "0.17.14"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "=0.52.0", features = [
