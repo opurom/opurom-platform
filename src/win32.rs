@@ -11,19 +11,21 @@ use std::mem::size_of;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use windows_sys::w;
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, EndPaint, InvalidateRect, StretchDIBits, UpdateWindow, BITMAPINFO,
+    BeginPaint, EndPaint, InvalidateRect, ScreenToClient, StretchDIBits, UpdateWindow, BITMAPINFO,
     BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HDC, PAINTSTRUCT, RGBQUAD, SRCCOPY,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::SystemServices::MK_LBUTTON;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW, LoadCursorW,
     PostQuitMessage, RegisterClassW, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
     CW_USEDEFAULT, IDC_ARROW, MSG, SW_SHOW, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
-    WM_PAINT, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
+use crate::input_map;
 use crate::{AdapterError, Capabilities, FrameView, InputEvent, Lifecycle, PlatformAdapter, Size};
 
 const INVALID_STATE: &str = "Win32 state mutex is poisoned";
@@ -60,6 +62,15 @@ fn push_event(event: InputEvent) {
     if let Ok(mut state) = STATE.lock() {
         state.events.push(event);
     }
+}
+
+/// The client-area cursor position packed into a pointer message's `lparam`.
+fn pointer(lparam: LPARAM) -> (f32, f32) {
+    let packed = lparam as u32;
+    (
+        (packed & 0xffff) as u16 as i16 as f32,
+        ((packed >> 16) & 0xffff) as u16 as i16 as f32,
+    )
 }
 
 fn checked_len(width: u32, height: u32) -> Result<usize, AdapterError> {
@@ -208,14 +219,43 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_LBUTTONDOWN => {
-            let packed = lparam as u32;
-            let x = (packed & 0xffff) as u16 as i16 as f32;
-            let y = ((packed >> 16) & 0xffff) as u16 as i16 as f32;
+            let (x, y) = pointer(lparam);
             push_event(InputEvent::Tap {
                 x,
                 y,
                 node_id: u32::MAX,
             });
+            0
+        }
+        WM_LBUTTONUP => {
+            let (x, y) = pointer(lparam);
+            push_event(InputEvent::PointerUp { x, y });
+            0
+        }
+        WM_MOUSEMOVE => {
+            let (x, y) = pointer(lparam);
+            let pressed = (wparam as u32) & MK_LBUTTON != 0;
+            push_event(input_map::pointer_move(pressed, x, y));
+            0
+        }
+        WM_MOUSEWHEEL => {
+            // The wheel delta rides the high word, in twelfths of a notch step.
+            let raw = ((wparam >> 16) & 0xffff) as u16 as i16;
+            let delta = input_map::wheel_delta(raw);
+            // This message carries screen coordinates while the ABI wants
+            // client-area ones; a failed conversion would place the notch at
+            // the wrong spot, so it is dropped instead.
+            let mut point = POINT {
+                x: (lparam as u32 & 0xffff) as u16 as i16 as i32,
+                y: ((lparam as u32 >> 16) & 0xffff) as u16 as i16 as i32,
+            };
+            if delta != 0.0 && ScreenToClient(hwnd, &mut point) != 0 {
+                push_event(InputEvent::Wheel {
+                    x: point.x as f32,
+                    y: point.y as f32,
+                    delta,
+                });
+            }
             0
         }
         WM_KEYDOWN | WM_KEYUP => {

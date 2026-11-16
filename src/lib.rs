@@ -30,6 +30,7 @@ pub mod gpu_animation;
 pub mod gpu_presentation;
 pub mod graphics_backend;
 mod headless;
+pub mod input_map;
 pub mod notification;
 mod pixel;
 mod png;
@@ -130,9 +131,17 @@ pub struct FrameView<'a> {
 }
 
 /// Unified input, normalized from touch/mouse/keyboard by each adapter.
+/// The pointer stream reads as `Tap` (press) → `PointerMove`/`PointerDrag`
+/// (motion with no button held / with one held) → `PointerUp` (release);
+/// `Wheel` is one scroll notch at the pointer with `delta` normalized so
+/// `1.0` is one notch away from the user (scrolled up).
 #[derive(Clone, Debug, PartialEq)]
 pub enum InputEvent {
     Tap { x: f32, y: f32, node_id: u32 },
+    PointerMove { x: f32, y: f32 },
+    PointerDrag { x: f32, y: f32 },
+    PointerUp { x: f32, y: f32 },
+    Wheel { x: f32, y: f32, delta: f32 },
     Input { node_id: u32, text: String },
     Key { code: u32, pressed: bool },
     Resize { size: Size },

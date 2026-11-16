@@ -13,6 +13,7 @@ use std::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void};
 use std::ptr::{null, null_mut};
 
 use crate::{
+    input_map,
     x11_pixels::{checked_len, rgba_to_xpixel},
     AdapterError, Capabilities, FrameView, InputEvent, Lifecycle, PlatformAdapter, Size,
 };
@@ -212,14 +213,20 @@ const TRUE_COLOR: c_int = 4;
 const KEY_PRESS: c_int = 2;
 const KEY_RELEASE: c_int = 3;
 const BUTTON_PRESS: c_int = 4;
+const BUTTON_RELEASE: c_int = 5;
+const MOTION_NOTIFY: c_int = 6;
 const EXPOSE: c_int = 12;
 const DESTROY_NOTIFY: c_int = 17;
 const CONFIGURE_NOTIFY: c_int = 22;
 const KEY_PRESS_MASK: c_long = 1 << 0;
 const KEY_RELEASE_MASK: c_long = 1 << 1;
 const BUTTON_PRESS_MASK: c_long = 1 << 2;
+const BUTTON_RELEASE_MASK: c_long = 1 << 3;
+const POINTER_MOTION_MASK: c_long = 1 << 6;
 const EXPOSURE_MASK: c_long = 1 << 15;
 const STRUCTURE_NOTIFY_MASK: c_long = 1 << 17;
+/// `Button1Mask` in an event's `state` field: the primary button is held.
+const BUTTON1_MASK: c_uint = 1 << 8;
 const RTLD_NOW: c_int = 2;
 const RTLD_LOCAL: c_int = 0;
 const X11_SONAMES: [&[u8]; 2] = [b"libX11.so.6\0", b"libX11.so\0"];
@@ -436,6 +443,8 @@ impl X11Host {
         let mask = KEY_PRESS_MASK
             | KEY_RELEASE_MASK
             | BUTTON_PRESS_MASK
+            | BUTTON_RELEASE_MASK
+            | POINTER_MOTION_MASK
             | EXPOSURE_MASK
             | STRUCTURE_NOTIFY_MASK;
         // SAFETY: all handles came from the live Xlib display above.
@@ -564,11 +573,35 @@ impl X11Host {
             }
             BUTTON_PRESS => {
                 let button = unsafe { event.button };
-                self.events.push_back(InputEvent::Tap {
-                    x: button.x as f32,
-                    y: button.y as f32,
-                    node_id: u32::MAX,
-                });
+                let (x, y) = (button.x as f32, button.y as f32);
+                match input_map::x11_scroll_notch(button.button) {
+                    Some(delta) => self.events.push_back(InputEvent::Wheel { x, y, delta }),
+                    None => self.events.push_back(InputEvent::Tap {
+                        x,
+                        y,
+                        node_id: u32::MAX,
+                    }),
+                }
+            }
+            BUTTON_RELEASE => {
+                let button = unsafe { event.button };
+                // A scroll notch reports no release of its own in the ABI.
+                if input_map::x11_scroll_notch(button.button).is_none() {
+                    self.events.push_back(InputEvent::PointerUp {
+                        x: button.x as f32,
+                        y: button.y as f32,
+                    });
+                }
+            }
+            MOTION_NOTIFY => {
+                // A motion event shares the button event's field layout
+                // through `state`, which is all this arm reads.
+                let motion = unsafe { event.button };
+                self.events.push_back(input_map::pointer_move(
+                    motion.state & BUTTON1_MASK != 0,
+                    motion.x as f32,
+                    motion.y as f32,
+                ));
             }
             CONFIGURE_NOTIFY => {
                 let configure = unsafe { event.configure };

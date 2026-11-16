@@ -5,17 +5,21 @@
 //! Wayland headers nor Wayland development libraries to build this crate. A
 //! missing `libwayland-client.so.0` or a missing symbol is a documented
 //! `AdapterError`, never a fake connection. The wire encoding itself is pure
-//! Rust in `crate::wayland_wire`, so its unit tests run on every host.
+//! Rust in `crate::wayland_wire`, so its unit tests run on every host. After
+//! the handshake, [`WaylandHost::pump_input`] turns the event object's frames
+//! into the ABI's input stream and [`WaylandHost::poll_input`] drains it.
 
+use std::collections::VecDeque;
 use std::ffi::{c_char, c_int, c_short, c_ulong, c_void, CString};
 use std::ptr::null_mut;
 use std::time::{Duration, Instant};
 
+use crate::input_map::wire_input;
 use crate::wayland_wire::{
-    decode_string, next_event, setup_handshake, ObjectIds, DISPLAY_ID, WL_CALLBACK_DONE,
-    WL_DISPLAY_ERROR_EVENT, WL_REGISTRY_GLOBAL,
+    decode_event, decode_string, next_event, setup_handshake, ObjectIds, DISPLAY_ID,
+    EVENT_OBJECT_ID, WL_CALLBACK_DONE, WL_DISPLAY_ERROR_EVENT, WL_REGISTRY_GLOBAL,
 };
-use crate::{AdapterError, WAYLAND_DISPLAY_ENV};
+use crate::{AdapterError, InputEvent, WAYLAND_DISPLAY_ENV};
 
 type WlDisplayConnectFn = unsafe extern "C" fn(*const c_char) -> *mut c_void;
 type WlDisplayDisconnectFn = unsafe extern "C" fn(*mut c_void);
@@ -39,6 +43,7 @@ const WAYLAND_POLL_ERROR: &str = "poll failed on the Wayland socket";
 const WAYLAND_TIMEOUT: &str = "the Wayland compositor did not answer the handshake";
 const WAYLAND_DISPLAY_ERROR: &str = "the Wayland compositor reported a wl_display error";
 const WAYLAND_HANDSHAKE_ERROR: &str = "the Wayland handshake did not complete";
+const WAYLAND_INPUT_ERROR: &str = "the Wayland event frame did not decode";
 /// The handshake waits at most this long for the compositor's reply.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -144,6 +149,12 @@ pub struct WaylandHost {
     registry_id: u32,
     ids: ObjectIds,
     lib: WaylandLibrary,
+    /// Bytes read from the socket but not yet consumed by a message loop.
+    buffer: Vec<u8>,
+    /// Input frames queued for `poll_input`, FIFO.
+    events: VecDeque<InputEvent>,
+    /// The pointer stream's press bracket: true from `Press` to `Release`.
+    pressed: bool,
 }
 
 impl WaylandHost {
@@ -172,6 +183,9 @@ impl WaylandHost {
             registry_id: 0,
             ids: ObjectIds::new(),
             lib,
+            buffer: Vec::new(),
+            events: VecDeque::new(),
+            pressed: false,
         })
     }
 
@@ -182,13 +196,13 @@ impl WaylandHost {
         self.registry_id = setup.registry_id;
         self.write_all(&setup.bytes)?;
 
-        let mut buffer: Vec<u8> = Vec::new();
+        self.buffer.clear();
         let mut report = Handshake::default();
         let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
         loop {
             // Consume every complete message the buffer holds, in order.
             let mut offset = 0usize;
-            while let Some((header, body, size)) = next_event(&buffer[offset..])? {
+            while let Some((header, body, size)) = next_event(&self.buffer[offset..])? {
                 if header.object_id == self.registry_id && header.opcode == WL_REGISTRY_GLOBAL {
                     // wl_registry.global carries a name word before the interface.
                     if body.len() < 4 {
@@ -206,7 +220,7 @@ impl WaylandHost {
                 offset += size;
             }
             if offset > 0 {
-                buffer.drain(..offset);
+                self.buffer.drain(..offset);
             }
             if report.callback_done {
                 break;
@@ -214,7 +228,7 @@ impl WaylandHost {
             if Instant::now() >= deadline {
                 return Err(AdapterError::Backend(WAYLAND_TIMEOUT));
             }
-            self.read_more(&mut buffer)?;
+            Self::read_more(self.fd, &mut self.buffer)?;
         }
         if unsafe { (self.lib.get_error)(self.display) } != 0 {
             return Err(AdapterError::Backend(WAYLAND_DISPLAY_ERROR));
@@ -223,6 +237,42 @@ impl WaylandHost {
             return Err(AdapterError::Backend(WAYLAND_HANDSHAKE_ERROR));
         }
         Ok(report)
+    }
+
+    /// Drain one read from the connection: queue the input frames the event
+    /// object carries, surface a display error as a typed failure and skip the
+    /// compositor's own protocol messages. An idle socket waits at most one
+    /// 100 ms poll tick. Returns how many input events were queued.
+    pub fn pump_input(&mut self) -> Result<usize, AdapterError> {
+        Self::read_more(self.fd, &mut self.buffer)?;
+        let mut queued = 0usize;
+        let mut offset = 0usize;
+        while let Some((header, _, size)) = next_event(&self.buffer[offset..])? {
+            if header.object_id == DISPLAY_ID && header.opcode == WL_DISPLAY_ERROR_EVENT {
+                return Err(AdapterError::Backend(WAYLAND_DISPLAY_ERROR));
+            }
+            if header.object_id == EVENT_OBJECT_ID {
+                let (frame, _) = decode_event(&self.buffer[offset..])?
+                    .ok_or(AdapterError::Backend(WAYLAND_INPUT_ERROR))?;
+                let (input, pressed) = wire_input(frame, self.pressed);
+                if let Some(event) = input {
+                    self.events.push_back(event);
+                    queued += 1;
+                }
+                self.pressed = pressed;
+            }
+            offset += size;
+        }
+        if offset > 0 {
+            self.buffer.drain(..offset);
+        }
+        Ok(queued)
+    }
+
+    /// Drain queued input events FIFO; never touches the socket, so it cannot
+    /// block.
+    pub fn poll_input(&mut self) -> Option<InputEvent> {
+        self.events.pop_front()
     }
 
     fn write_all(&self, bytes: &[u8]) -> Result<(), AdapterError> {
@@ -245,9 +295,9 @@ impl WaylandHost {
         Ok(())
     }
 
-    fn read_more(&self, buffer: &mut Vec<u8>) -> Result<(), AdapterError> {
+    fn read_more(fd: c_int, buffer: &mut Vec<u8>) -> Result<(), AdapterError> {
         let mut fds = PollFd {
-            fd: self.fd,
+            fd,
             events: POLLIN,
             revents: 0,
         };
@@ -261,7 +311,7 @@ impl WaylandHost {
         }
         let mut chunk = [0u8; 4096];
         // SAFETY: the chunk is a valid writable buffer of the given length.
-        let count = unsafe { recv(self.fd, chunk.as_mut_ptr().cast::<c_void>(), chunk.len(), 0) };
+        let count = unsafe { recv(fd, chunk.as_mut_ptr().cast::<c_void>(), chunk.len(), 0) };
         if count < 0 {
             return Err(AdapterError::Backend(WAYLAND_READ_ERROR));
         }

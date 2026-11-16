@@ -126,7 +126,7 @@ renders a real frame. The mobile and handheld rows have no adapter and stay
 | `WindowMetadata` | deterministic window query: `title` and `dpi_scale`; the `metadata` default derives them from `name()` and `capabilities()` |
 | `FrameView<'a>` | borrowed RGBA8 view `{ width: u32, height: u32, pixels: &'a [u8] }`, defined here so the renderer is not a compile-time dependency of adapters |
 | `Size` | logical viewport `{ width: u32, height: u32 }` |
-| `InputEvent` | `Tap`, `Input`, `Key`, `Resize`, `Lifecycle`; logical pixels, top-left origin, `node_id: u32::MAX` when hit-testing is unavailable |
+| `InputEvent` | `Tap`, `PointerMove`, `PointerDrag`, `PointerUp`, `Wheel`, `Input`, `Key`, `Resize`, `Lifecycle`; logical pixels, top-left origin, `node_id: u32::MAX` when hit-testing is unavailable, wheel `delta` in notches (`1.0` per notch) |
 | `Capabilities` | `gpu`, `native_embed`, `multi_window`, `lifecycle`, `dpi_scale` |
 | `AdapterError` | `InvalidFrame` (bad RGBA8 length) and `Backend(&'static str)`; always a value, never a panic across the boundary |
 | `Status` | `Verified`, `Scaffold`, `Planned` |
@@ -604,13 +604,15 @@ three times before the headless fallback takes over.
   creates a window with `CreateWindowExW`, and `run()` pumps `GetMessageW` /
   `TranslateMessage` / `DispatchMessageW`. `present()` converts RGBA8 to the
   BGRA byte order of a top-down 32-bit `BI_RGB` DIB; `WM_PAINT` calls
-  `StretchDIBits`. `WM_DESTROY` calls `PostQuitMessage`. Key, tap and resize
-  messages become `InputEvent`s. The shortcut is one window per process.
+  `StretchDIBits`. `WM_DESTROY` calls `PostQuitMessage`. Key, tap, pointer
+  move/up and wheel messages become `InputEvent`s. The shortcut is one window
+  per process.
 - `X11Host::open()` dynamically resolves and calls `XOpenDisplay`,
   `XCreateSimpleWindow`, `XMapWindow`, `XSelectInput` and `XFlush`;
   `present()` packs RGBA8 through the TrueColor visual masks into an
   `XCreateImage` DIB and draws it with `XPutImage`. `pump()` / `run()` use
-  `XNextEvent`, and `close()` uses `XFreeGC`, `XDestroyWindow` and
+  `XNextEvent` over key, button, wheel, motion, expose and configure events,
+  and `close()` uses `XFreeGC`, `XDestroyWindow` and
   `XCloseDisplay`. Symbols come from `dlopen`/`dlsym` at runtime only when a
   window is opened, so the default Linux build has no `-lX11` link requirement
   and needs no X11 headers. A missing `libX11.so.6` returns
@@ -624,7 +626,10 @@ three times before the headless fallback takes over.
   needs no Wayland headers. `handshake()` writes the setup handshake - the
   `wl_display.get_registry` and `wl_display.sync` requests - to the
   compositor's socket and collects the announced globals and the sync
-  callback. A missing `libwayland-client.so.0` returns
+  callback. `pump_input()` then reads the socket and maps the event object's
+  press, release, move and resize frames into `InputEvent`s - a move inside a
+  press bracket is a drag - and `poll_input()` drains them FIFO. A missing
+  `libwayland-client.so.0` returns
   `Wayland unavailable: dlopen(...) failed`; a missing symbol returns
   `Wayland unavailable: libwayland-client is missing a required symbol`.
 - The Wayland wire encoding is pure Rust in `src/wayland_wire.rs` and runs its
