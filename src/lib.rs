@@ -52,6 +52,9 @@ mod x11_pixels;
 pub mod platform_view;
 pub mod viewport_layout;
 pub mod wayland_wire;
+// Pure output-scale state shared by the Linux host and its tests.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod wayland_scale;
 
 #[cfg(target_os = "macos")]
 mod appkit;

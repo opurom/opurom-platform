@@ -16,23 +16,24 @@ use std::time::{Duration, Instant};
 
 use crate::ime::{self, ImeStatus, TextComposer};
 use crate::input_map::{self, wire_input};
+use crate::wayland_scale::OutputScales;
 use crate::wayland_wire::{
     decode_empty_event, decode_event, decode_keyboard_enter, decode_keyboard_key,
     decode_keyboard_keymap, decode_keyboard_leave, decode_output_scale, decode_pointer_axis,
     decode_pointer_button, decode_pointer_enter, decode_pointer_leave, decode_pointer_motion,
-    decode_string, decode_toplevel_configure, decode_xdg_configure_serial, encode_ack_configure,
-    encode_create_buffer, encode_create_pool, encode_create_surface, encode_pong,
-    encode_registry_bind, encode_seat_device, encode_surface_attach, encode_surface_commit,
-    encode_surface_damage, encode_toplevel_string, encode_xdg_get_surface, encode_xdg_get_toplevel,
-    fixed_to_f32, next_event, recvmsg_with_fds, send_with_fd, setup_handshake, ObjectIds,
-    DISPLAY_ID, EVENT_OBJECT_ID, WL_BUFFER_RELEASE, WL_BUTTON_PRESSED, WL_CALLBACK_DONE,
-    WL_DISPLAY_ERROR_EVENT, WL_KEYBOARD_ENTER, WL_KEYBOARD_KEY, WL_KEYBOARD_KEYMAP,
-    WL_KEYBOARD_LEAVE, WL_KEY_PRESSED, WL_OUTPUT_DONE, WL_OUTPUT_SCALE, WL_POINTER_AXIS,
-    WL_POINTER_AXIS_VERTICAL, WL_POINTER_BUTTON, WL_POINTER_ENTER, WL_POINTER_FRAME,
-    WL_POINTER_LEAVE, WL_POINTER_MOTION, WL_POINTER_PRIMARY, WL_REGISTRY_GLOBAL,
-    WL_SEAT_GET_KEYBOARD, WL_SEAT_GET_POINTER, WL_SHM_FORMAT_ARGB8888, XDG_SURFACE_CONFIGURE,
-    XDG_TOPLEVEL_CLOSE, XDG_TOPLEVEL_CONFIGURE, XDG_TOPLEVEL_SET_APP_ID, XDG_TOPLEVEL_SET_TITLE,
-    XDG_WM_BASE_PING,
+    decode_string, decode_surface_output, decode_toplevel_configure, decode_xdg_configure_serial,
+    encode_ack_configure, encode_create_buffer, encode_create_pool, encode_create_surface,
+    encode_pong, encode_registry_bind, encode_seat_device, encode_surface_attach,
+    encode_surface_commit, encode_surface_damage, encode_toplevel_string, encode_xdg_get_surface,
+    encode_xdg_get_toplevel, fixed_to_f32, next_event, recvmsg_with_fds, send_with_fd,
+    setup_handshake, ObjectIds, DISPLAY_ID, EVENT_OBJECT_ID, WL_BUFFER_RELEASE, WL_BUTTON_PRESSED,
+    WL_CALLBACK_DONE, WL_DISPLAY_ERROR_EVENT, WL_KEYBOARD_ENTER, WL_KEYBOARD_KEY,
+    WL_KEYBOARD_KEYMAP, WL_KEYBOARD_LEAVE, WL_KEY_PRESSED, WL_OUTPUT_DONE, WL_OUTPUT_SCALE,
+    WL_POINTER_AXIS, WL_POINTER_AXIS_VERTICAL, WL_POINTER_BUTTON, WL_POINTER_ENTER,
+    WL_POINTER_FRAME, WL_POINTER_LEAVE, WL_POINTER_MOTION, WL_POINTER_PRIMARY, WL_REGISTRY_GLOBAL,
+    WL_SEAT_GET_KEYBOARD, WL_SEAT_GET_POINTER, WL_SHM_FORMAT_ARGB8888, WL_SURFACE_ENTER,
+    WL_SURFACE_LEAVE, XDG_SURFACE_CONFIGURE, XDG_TOPLEVEL_CLOSE, XDG_TOPLEVEL_CONFIGURE,
+    XDG_TOPLEVEL_SET_APP_ID, XDG_TOPLEVEL_SET_TITLE, XDG_WM_BASE_PING,
 };
 use crate::{AdapterError, FrameView, InputEvent, Lifecycle, Size, WAYLAND_DISPLAY_ENV};
 
@@ -231,14 +232,12 @@ pub struct WaylandHost {
     text_id: u32,
     composer: TextComposer,
     ime_status: Option<ImeStatus>,
-    /// `(name, version)` of the first announced `wl_output`, if any.
-    output_global: Option<(u32, u32)>,
-    /// The bound output object, or 0 while unbound.
-    output_id: u32,
-    /// The output scale applied to the stream, once known.
-    scale_applied: Option<f32>,
-    /// A scale event awaiting its `done` frame.
-    scale_pending: Option<f32>,
+    /// All announced `wl_output` globals, in registry order.
+    output_globals: Vec<(u32, u32)>,
+    /// Scale state of the bound outputs and of the surface's current output.
+    output_scales: OutputScales,
+    /// Whether the output globals have been bound once.
+    outputs_bound: bool,
     /// `(name, version)` of the first announced `wl_compositor`, if any.
     compositor_global: Option<(u32, u32)>,
     /// `(name, version)` of the first announced `wl_shm`, if any.
@@ -313,10 +312,9 @@ impl WaylandHost {
             text_id: 0,
             composer: TextComposer::default(),
             ime_status: None,
-            output_global: None,
-            output_id: 0,
-            scale_applied: None,
-            scale_pending: None,
+            output_globals: Vec::new(),
+            output_scales: OutputScales::default(),
+            outputs_bound: false,
             compositor_global: None,
             shm_global: None,
             wm_base_global: None,
@@ -374,9 +372,7 @@ impl WaylandHost {
                         "zwp_text_input_manager_v3" if self.text_manager.is_none() => {
                             self.text_manager = Some((name, version));
                         }
-                        "wl_output" if self.output_global.is_none() => {
-                            self.output_global = Some((name, version));
-                        }
+                        "wl_output" => self.output_globals.push((name, version)),
                         "wl_compositor" if self.compositor_global.is_none() => {
                             self.compositor_global = Some((name, version));
                         }
@@ -538,23 +534,39 @@ impl WaylandHost {
                     });
                     queued += 1;
                 }
-            } else if header.object_id == self.output_id && self.output_id != 0 {
+            } else if self.output_scales.has(header.object_id) {
                 match header.opcode {
                     WL_OUTPUT_SCALE => {
-                        self.scale_pending = Some(decode_output_scale(body)? as f32);
+                        let factor = decode_output_scale(body)? as f32;
+                        self.output_scales.scale(header.object_id, factor);
                     }
                     WL_OUTPUT_DONE => {
-                        if self.scale_pending.is_some() && self.scale_pending != self.scale_applied
-                        {
-                            self.scale_applied = self.scale_pending;
-                            if let Some(scale) = self.scale_applied {
-                                self.events.push_back(InputEvent::Scale { scale });
-                                queued += 1;
-                            }
+                        decode_empty_event(body)?;
+                        if let Some(scale) = self.output_scales.done(header.object_id) {
+                            self.events.push_back(InputEvent::Scale { scale });
+                            queued += 1;
                         }
                     }
                     // geometry/mode and the v2 name/description frames carry
                     // nothing the ABI's scale channel needs.
+                    _ => {}
+                }
+            } else if self.is_our_surface(header.object_id) {
+                match header.opcode {
+                    WL_SURFACE_ENTER | WL_SURFACE_LEAVE => {
+                        let output = decode_surface_output(body)?;
+                        let scale = if header.opcode == WL_SURFACE_ENTER {
+                            self.output_scales.enter(output)
+                        } else {
+                            self.output_scales.leave(output)
+                        };
+                        if let Some(scale) = scale {
+                            self.events.push_back(InputEvent::Scale { scale });
+                            queued += 1;
+                        }
+                    }
+                    // v6 preferred_buffer_scale is a second scale source;
+                    // output state is authoritative here.
                     _ => {}
                 }
             } else if header.object_id == self.server_ids.xdg_surface
@@ -639,9 +651,10 @@ impl WaylandHost {
     /// send the enable/commit pair. Later calls report the stored status; a
     /// compositor that announces neither global degrades with a typed reason.
     ///
-    /// shortcut: committed text only arrives while a surface holds keyboard
-    /// focus, which 0.1.0's host does not create yet — the mapping is live
-    /// from here, and the events begin with the surface work.
+    /// shortcut: committed text arrives only while the window holds keyboard
+    /// focus, and preedit previews have no ABI channel yet so `TextComposer`
+    /// still drops them. The committed-text path is live once the window is
+    /// mapped; no further protocol work is needed for it.
     pub fn ime(&mut self) -> Result<ImeStatus, AdapterError> {
         if let Some(status) = self.ime_status {
             return Ok(status);
@@ -677,33 +690,37 @@ impl WaylandHost {
         Ok(ImeStatus::Ready)
     }
 
-    /// Bind the first announced output and report the content scale it
-    /// carries. The value is also queued as `Scale` — once at the first
-    /// bind, then again on every change. No announced output, or a v1
-    /// output without a scale event, degrades per the ABI: one `Scale{1.0}`
-    /// at window build and no further events.
-    ///
-    /// shortcut: a live window follows the scale of the output its surface
-    /// sits on; with no surface yet, the first output stands in.
+    /// Bind every announced output and report the scale of the output the
+    /// surface currently occupies. `Scale` is queued on the first call, on
+    /// surface enter/leave and on the active output's scale change. With no
+    /// announced output, or none carrying a scale event, the ABI degrades to
+    /// one `Scale{1.0}`.
     pub fn scale(&mut self) -> Result<f32, AdapterError> {
-        if self.scale_applied.is_none() && self.output_id == 0 {
-            if let Some((name, version)) = self.output_global {
+        if !self.outputs_bound {
+            self.outputs_bound = true;
+            let mut bytes = Vec::new();
+            for (name, version) in self.output_globals.clone() {
                 let id = self.ids.allocate()?;
-                let bytes = encode_registry_bind(self.registry_id, name, "wl_output", version, id)?;
-                self.write_all(&bytes)?;
-                self.output_id = id;
+                bytes.extend(encode_registry_bind(
+                    self.registry_id,
+                    name,
+                    "wl_output",
+                    version,
+                    id,
+                )?);
+                self.output_scales.bind(id);
             }
-            if self.output_id != 0 {
-                // The output's state (geometry, mode, scale) arrives on bind;
-                // one read normally carries all of it.
+            self.write_all(&bytes)?;
+            if !self.output_globals.is_empty() {
+                // The output state arrives on bind; one read normally carries
+                // all of it.
                 self.pump_input()?;
             }
-            if self.scale_applied.is_none() {
-                self.scale_applied = Some(1.0);
-                self.events.push_back(InputEvent::Scale { scale: 1.0 });
-            }
         }
-        Ok(self.scale_applied.expect("applied above"))
+        if let Some(scale) = self.output_scales.emit_current() {
+            self.events.push_back(InputEvent::Scale { scale });
+        }
+        Ok(self.output_scales.current())
     }
 
     fn write_all(&self, bytes: &[u8]) -> Result<(), AdapterError> {
@@ -963,6 +980,9 @@ impl WaylandHost {
         // send the configure sequence we wait for below.
         setup.extend(encode_surface_commit(ids.surface)?);
         self.write_all(&setup)?;
+        // The surface exists now, so arm text input before the compositor
+        // sends focus; a compositor without the global degrades typed.
+        self.arm_ime()?;
 
         let deadline = Instant::now() + WINDOW_TIMEOUT;
         while self.configure_serial.is_none() {
@@ -1024,6 +1044,7 @@ impl WaylandHost {
             stride,
             size,
         });
+        self.scale()?;
         self.events.push_back(InputEvent::Resize { size });
         Ok(())
     }

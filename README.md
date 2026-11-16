@@ -719,6 +719,8 @@ libraries and the wire encoding is verified by `cargo test` everywhere.
 | Geometry event | `src/wayland_wire.rs` | opcode 5 on `EVENT_OBJECT_ID`: a 44-byte message with nine native-endian words carrying the validated display geometry and fold state |
 | Layout patch | `src/wayland_wire.rs` | opcode 6 on `EVENT_OBJECT_ID`: a 100-byte message with 23 native-endian words carrying a validated layout decision |
 | Graphics backend capability | `src/wayland_wire.rs` | opcode 7 on `EVENT_OBJECT_ID`: a 44-byte message with nine native-endian words carrying host OS, backend, canonical capability row and typed selection reason |
+| Surface output events | `src/wayland_wire.rs` | `wl_surface.enter`/`leave` decode one `wl_output` object id with strict length and a typed error on a malformed frame |
+| Output scale state | `src/wayland_scale.rs` | per-output scale applied on `wl_output.done`; `Scale` follows the surface's current output, switches on enter/leave, and degrades to one `Scale{1.0}` with no output |
 
 Native hosts normalize resize and pointer events into the same two 32-bit
 words: Win32 packs `WM_SIZE` and `WM_LBUTTONDOWN` coordinates into `lparam`,

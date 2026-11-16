@@ -44,6 +44,9 @@ pub const WL_OUTPUT_DONE: u16 = 2;
 pub const WL_OUTPUT_SCALE: u16 = 3;
 // wl_compositor requests: create_surface, create_region.
 pub const WL_COMPOSITOR_CREATE_SURFACE: u16 = 0;
+// wl_surface events: enter, leave; each carries one wl_output object id.
+pub const WL_SURFACE_ENTER: u16 = 0;
+pub const WL_SURFACE_LEAVE: u16 = 1;
 // wl_surface requests: destroy, attach, damage, frame, set_opaque_region,
 // set_input_region, commit.
 pub const WL_SURFACE_ATTACH: u16 = 1;
@@ -1114,6 +1117,14 @@ pub fn decode_output_scale(body: &[u8]) -> Result<u32, AdapterError> {
     Ok(u32::from_ne_bytes([body[0], body[1], body[2], body[3]]))
 }
 
+/// `wl_surface.enter`/`leave`: the single `wl_output` object id.
+pub fn decode_surface_output(body: &[u8]) -> Result<u32, AdapterError> {
+    if body.len() != 4 {
+        return Err(AdapterError::Backend(BAD_EVENT_BODY));
+    }
+    Ok(u32::from_ne_bytes([body[0], body[1], body[2], body[3]]))
+}
+
 /// Decode a whole batch, refusing more than `limit` events. A batch must end
 /// on a message boundary: trailing partial bytes are an error, not a short read.
 pub fn decode_batch(bytes: &[u8], limit: usize) -> Result<Vec<WireEvent>, AdapterError> {
@@ -1252,6 +1263,21 @@ mod tests {
         assert_eq!(decode_output_scale(&2u32.to_ne_bytes()).unwrap(), 2);
         assert!(decode_output_scale(&[1, 2, 3]).is_err());
         assert!(decode_output_scale(&[0u8; 8]).is_err());
+    }
+
+    #[test]
+    fn surface_output_decodes_enter_and_leave_words() {
+        assert_eq!(WL_SURFACE_ENTER, 0);
+        assert_eq!(WL_SURFACE_LEAVE, 1);
+        let output = 0xff00_0003u32;
+        assert_eq!(
+            decode_surface_output(&output.to_ne_bytes()).unwrap(),
+            output
+        );
+        assert_eq!(decode_surface_output(&0u32.to_ne_bytes()).unwrap(), 0);
+        for bad in [&b""[..], &[1u8, 2, 3][..], &[0u8; 8][..]] {
+            assert!(decode_surface_output(bad).is_err());
+        }
     }
 
     #[cfg(unix)]
