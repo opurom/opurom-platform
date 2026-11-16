@@ -2,11 +2,12 @@
 //! secure random source. Every function is pure from the caller's view: the
 //! same key, nonce and plaintext always produce the same ciphertext, so tests
 //! can assert fixed vectors. Only the random source is nondeterministic, by
-//! design. Backed by `ring`, so the same code runs on every host and the Android
-//! adapter reaches javax.crypto for the identical primitives.
+//! design. Pure-Rust crates keep every cross-compile target free of a C
+//! toolchain; the Android adapter reaches javax.crypto for the identical
+//! primitives.
 
-use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
-use ring::rand::{SecureRandom, SystemRandom};
+use aes_gcm::aead::{Aead, KeyInit, Payload};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
 
 /// AES-GCM nonce length in bytes (96-bit, the recommended size).
 pub const NONCE_LEN: usize = 12;
@@ -54,55 +55,53 @@ impl std::fmt::Display for CryptoError {
 
 impl std::error::Error for CryptoError {}
 
-fn aead_key(key: &[u8]) -> Result<LessSafeKey, CryptoError> {
+fn cipher(key: &[u8]) -> Result<Aes256Gcm, CryptoError> {
     if key.len() != KEY_LEN {
         return Err(CryptoError::BadKeyLen);
     }
-    let unbound = UnboundKey::new(&AES_256_GCM, key).map_err(|_| CryptoError::BadKeyLen)?;
-    Ok(LessSafeKey::new(unbound))
+    Ok(Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key)))
 }
 
-fn nonce(value: &[u8]) -> Result<Nonce, CryptoError> {
-    let bytes: [u8; NONCE_LEN] = value.try_into().map_err(|_| CryptoError::BadNonceLen)?;
-    Ok(Nonce::assume_unique_for_key(bytes))
+fn nonce_bytes(value: &[u8]) -> Result<&[u8; NONCE_LEN], CryptoError> {
+    value.try_into().map_err(|_| CryptoError::BadNonceLen)
 }
 
 /// Seal `plaintext` under `key` with `nonce`, returning `ciphertext || tag`. The
 /// caller owns nonce uniqueness: a repeated (key, nonce) pair breaks GCM, so use
 /// [`secure_random_nonce`] for real messages and a fixed nonce only in tests.
-pub fn aes_gcm_seal(
-    key: &[u8],
-    nonce_bytes: &[u8],
-    plaintext: &[u8],
-) -> Result<Vec<u8>, CryptoError> {
-    let key = aead_key(key)?;
-    let nonce = nonce(nonce_bytes)?;
-    let mut in_out = plaintext.to_vec();
-    key.seal_in_place_append_tag(nonce, Aad::empty(), &mut in_out)
-        .map_err(|_| CryptoError::BadCiphertext)?;
-    Ok(in_out)
+pub fn aes_gcm_seal(key: &[u8], nonce: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    let cipher = cipher(key)?;
+    let nonce = Nonce::from_slice(nonce_bytes(nonce)?);
+    cipher
+        .encrypt(
+            nonce,
+            Payload {
+                msg: plaintext,
+                aad: b"",
+            },
+        )
+        .map_err(|_| CryptoError::BadCiphertext)
 }
 
 /// Open a `ciphertext || tag` blob produced by [`aes_gcm_seal`]. Fails with
 /// [`CryptoError::BadCiphertext`] when the tag does not authenticate.
-pub fn aes_gcm_open(key: &[u8], nonce_bytes: &[u8], sealed: &[u8]) -> Result<Vec<u8>, CryptoError> {
-    let key = aead_key(key)?;
-    let nonce = nonce(nonce_bytes)?;
-    if sealed.len() < TAG_LEN {
-        return Err(CryptoError::BadCiphertext);
-    }
-    let mut in_out = sealed.to_vec();
-    let plain = key
-        .open_in_place(nonce, Aad::empty(), &mut in_out)
-        .map_err(|_| CryptoError::BadCiphertext)?;
-    Ok(plain.to_vec())
+pub fn aes_gcm_open(key: &[u8], nonce: &[u8], sealed: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    let cipher = cipher(key)?;
+    let nonce = Nonce::from_slice(nonce_bytes(nonce)?);
+    cipher
+        .decrypt(
+            nonce,
+            Payload {
+                msg: sealed,
+                aad: b"",
+            },
+        )
+        .map_err(|_| CryptoError::BadCiphertext)
 }
 
 /// Fill `out` with cryptographically secure random bytes from the system source.
 pub fn secure_random(out: &mut [u8]) -> Result<(), CryptoError> {
-    SystemRandom::new()
-        .fill(out)
-        .map_err(|_| CryptoError::RandomUnavailable)
+    getrandom::getrandom(out).map_err(|_| CryptoError::RandomUnavailable)
 }
 
 /// A fresh 12-byte nonce from the secure random source, ready for [`aes_gcm_seal`].
