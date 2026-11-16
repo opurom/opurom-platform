@@ -298,6 +298,7 @@ fn desktop_matrix_names_every_capability_once() {
             "crypto",
             "filesystem",
             "global_hotkey",
+            "notification",
             "socket",
             "storage",
             "tray"
@@ -314,6 +315,18 @@ fn desktop_matrix_names_every_capability_once() {
         let row = matrix.iter().find(|s| s.capability == expected).unwrap();
         assert_eq!(row.status, DesktopStatus::Native);
     }
+    // Notification posts through the system scripting tool on macOS and only
+    // degrades to the headless sink elsewhere in 0.1.0.
+    let notification = matrix
+        .iter()
+        .find(|s| s.capability == DesktopCapability::Notification)
+        .unwrap();
+    let expected_status = if cfg!(target_os = "macos") {
+        DesktopStatus::Native
+    } else {
+        DesktopStatus::Headless
+    };
+    assert_eq!(notification.status, expected_status);
 }
 
 // ---------------------------------------------------------------- macOS live

@@ -30,6 +30,7 @@ pub mod gpu_animation;
 pub mod gpu_presentation;
 pub mod graphics_backend;
 mod headless;
+pub mod notification;
 mod pixel;
 mod png;
 mod ppm;
@@ -569,6 +570,7 @@ pub enum DesktopCapability {
     Storage,
     Crypto,
     Socket,
+    Notification,
 }
 
 impl DesktopCapability {
@@ -581,6 +583,7 @@ impl DesktopCapability {
             DesktopCapability::Storage => "storage",
             DesktopCapability::Crypto => "crypto",
             DesktopCapability::Socket => "socket",
+            DesktopCapability::Notification => "notification",
         }
     }
 }
@@ -617,25 +620,29 @@ pub struct DesktopSupport {
 
 /// The desktop capability matrix for the current build. The filesystem scanner
 /// is host-independent, so it is always `Headless`-available (its real work is
-/// plain file IO, not a device). Tray/Hotkey/Audio are `Native` only where a
-/// real adapter is compiled in, and `Headless` where only the pure model exists.
+/// plain file IO, not a device). Tray/Hotkey/Audio/Notification are `Native`
+/// only where a real adapter is compiled in, and `Headless` where only the
+/// pure model exists.
 pub fn desktop_support() -> Vec<DesktopSupport> {
     #[cfg(target_os = "macos")]
-    let (tray, hotkey, audio) = (
+    let (tray, hotkey, audio, notification) = (
+        DesktopStatus::Native,
         DesktopStatus::Native,
         DesktopStatus::Native,
         DesktopStatus::Native,
     );
     #[cfg(target_os = "windows")]
-    let (tray, hotkey, audio) = (
+    let (tray, hotkey, audio, notification) = (
         DesktopStatus::Native,
         DesktopStatus::Native,
         DesktopStatus::Headless,
+        DesktopStatus::Headless,
     );
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let (tray, hotkey, audio) = (
+    let (tray, hotkey, audio, notification) = (
         DesktopStatus::Unavailable,
         DesktopStatus::Unavailable,
+        DesktopStatus::Headless,
         DesktopStatus::Headless,
     );
     vec![
@@ -670,6 +677,12 @@ pub fn desktop_support() -> Vec<DesktopSupport> {
             capability: DesktopCapability::Socket,
             // Synchronous TCP over std::net: real on every host.
             status: DesktopStatus::Native,
+        },
+        DesktopSupport {
+            capability: DesktopCapability::Notification,
+            // The system scripting adapter is macOS-only in 0.1.0; elsewhere
+            // the deterministic sink is all there is.
+            status: notification,
         },
     ]
 }

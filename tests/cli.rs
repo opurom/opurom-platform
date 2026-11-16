@@ -45,6 +45,23 @@ fn default_output_keeps_the_14_unique_target_rows() {
 }
 
 #[test]
+fn desktop_flag_prints_every_capability_row() {
+    let out = run(&["--desktop"]);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "capability | status");
+    // Header plus one row per DesktopCapability, notification included.
+    assert_eq!(lines.len(), 9, "header + exactly 8 capability rows");
+    let notification = lines
+        .iter()
+        .find(|line| line.starts_with("notification | "))
+        .expect("notification row is printed");
+    assert!(
+        notification.ends_with(" | native") || notification.ends_with(" | headless"),
+        "got {notification}"
+    );
+}
+
+#[test]
 fn hosts_flag_lists_the_verified_hosts() {
     let out = run(&["--hosts"]);
     let lines: Vec<&str> = out.lines().collect();
