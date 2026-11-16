@@ -663,8 +663,16 @@ three times before the headless fallback takes over.
   `configure`, acks it, then maps a double-buffered memfd pool (its fd passed
   with SCM_RIGHTS); `present(frame)` copies into a released `wl_buffer` and
   commits, and `wl_buffer.release` marks it reusable. xdg pings are answered
-  with pong. `shortcut`: no `wl_surface.frame` repaint pace and no
-  server-side decorations yet. A missing
+  with pong. `open_input()` binds `wl_seat` once (shared with text input),
+  waits for its capability mask and creates `wl_pointer`/`wl_keyboard` only
+  for the devices present; pointer enter/motion/button/axis events accumulate
+  inside a `wl_pointer.frame` and are submitted as `Tap`/`PointerMove`/
+  `PointerDrag`/`PointerUp`/`Wheel` only at the frame boundary (pre-v5 seats
+  submit per event), keyboard `key` events become `Key`, and the keymap fd is
+  received via SCM_RIGHTS and closed at once (parsing is a follow-up). The
+  `is_our_surface` check is the single-surface routing seam for S3. `shortcut`:
+  no `wl_surface.frame` repaint pace, no server-side decorations, horizontal
+  scroll and secondary buttons stay unmapped. A missing
   `libwayland-client.so.0` returns
   `Wayland unavailable: dlopen(...) failed`; a missing symbol returns
   `Wayland unavailable: libwayland-client is missing a required symbol`.

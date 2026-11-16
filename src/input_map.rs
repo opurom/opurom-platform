@@ -71,6 +71,12 @@ pub fn wire_input(event: WireEvent, pressed: bool) -> (Option<InputEvent>, bool)
     }
 }
 
+/// Wayland's vertical scroll value is signed 24.8 and positive scrolls down;
+/// flip the sign into the ABI's "positive scrolls up" notch convention.
+pub fn wayland_wheel_delta(raw_fixed: i32) -> f32 {
+    -(raw_fixed as f32 / 256.0)
+}
+
 /// A device DPI value against the ABI's 96 DPI baseline: 96 reports 1.0,
 /// 144 reports 1.5.
 pub fn dpi_scale(dpi: u32) -> f32 {

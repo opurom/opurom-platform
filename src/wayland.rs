@@ -15,17 +15,24 @@ use std::ptr::null_mut;
 use std::time::{Duration, Instant};
 
 use crate::ime::{self, ImeStatus, TextComposer};
-use crate::input_map::wire_input;
+use crate::input_map::{self, wire_input};
 use crate::wayland_wire::{
-    decode_empty_event, decode_event, decode_output_scale, decode_string,
-    decode_toplevel_configure, decode_xdg_configure_serial, encode_ack_configure,
+    decode_empty_event, decode_event, decode_keyboard_enter, decode_keyboard_key,
+    decode_keyboard_keymap, decode_keyboard_leave, decode_output_scale, decode_pointer_axis,
+    decode_pointer_button, decode_pointer_enter, decode_pointer_leave, decode_pointer_motion,
+    decode_string, decode_toplevel_configure, decode_xdg_configure_serial, encode_ack_configure,
     encode_create_buffer, encode_create_pool, encode_create_surface, encode_pong,
-    encode_registry_bind, encode_surface_attach, encode_surface_commit, encode_surface_damage,
-    encode_toplevel_string, encode_xdg_get_surface, encode_xdg_get_toplevel, next_event,
-    send_with_fd, setup_handshake, ObjectIds, DISPLAY_ID, EVENT_OBJECT_ID, WL_BUFFER_RELEASE,
-    WL_CALLBACK_DONE, WL_DISPLAY_ERROR_EVENT, WL_OUTPUT_DONE, WL_OUTPUT_SCALE, WL_REGISTRY_GLOBAL,
-    WL_SHM_FORMAT_ARGB8888, XDG_SURFACE_CONFIGURE, XDG_TOPLEVEL_CLOSE, XDG_TOPLEVEL_CONFIGURE,
-    XDG_TOPLEVEL_SET_APP_ID, XDG_TOPLEVEL_SET_TITLE, XDG_WM_BASE_PING,
+    encode_registry_bind, encode_seat_device, encode_surface_attach, encode_surface_commit,
+    encode_surface_damage, encode_toplevel_string, encode_xdg_get_surface, encode_xdg_get_toplevel,
+    fixed_to_f32, next_event, recvmsg_with_fds, send_with_fd, setup_handshake, ObjectIds,
+    DISPLAY_ID, EVENT_OBJECT_ID, WL_BUFFER_RELEASE, WL_BUTTON_PRESSED, WL_CALLBACK_DONE,
+    WL_DISPLAY_ERROR_EVENT, WL_KEYBOARD_ENTER, WL_KEYBOARD_KEY, WL_KEYBOARD_KEYMAP,
+    WL_KEYBOARD_LEAVE, WL_KEY_PRESSED, WL_OUTPUT_DONE, WL_OUTPUT_SCALE, WL_POINTER_AXIS,
+    WL_POINTER_AXIS_VERTICAL, WL_POINTER_BUTTON, WL_POINTER_ENTER, WL_POINTER_FRAME,
+    WL_POINTER_LEAVE, WL_POINTER_MOTION, WL_POINTER_PRIMARY, WL_REGISTRY_GLOBAL,
+    WL_SEAT_GET_KEYBOARD, WL_SEAT_GET_POINTER, WL_SHM_FORMAT_ARGB8888, XDG_SURFACE_CONFIGURE,
+    XDG_TOPLEVEL_CLOSE, XDG_TOPLEVEL_CONFIGURE, XDG_TOPLEVEL_SET_APP_ID, XDG_TOPLEVEL_SET_TITLE,
+    XDG_WM_BASE_PING,
 };
 use crate::{AdapterError, FrameView, InputEvent, Lifecycle, Size, WAYLAND_DISPLAY_ENV};
 
@@ -60,10 +67,14 @@ const WAYLAND_WINDOW_OPEN: &str = "a window is already open on this connection";
 const WAYLAND_CONFIGURE_TIMEOUT: &str = "the compositor did not configure the window";
 const WAYLAND_BUFFER_TIMEOUT: &str = "the compositor did not release a shm buffer";
 const WAYLAND_SHM_FAILED: &str = "the shared memory pool could not be created";
+const WAYLAND_NO_SEAT: &str = "the compositor does not announce wl_seat";
+const WAYLAND_SEAT_TIMEOUT: &str = "the compositor did not report seat capabilities";
 /// The handshake waits at most this long for the compositor's reply.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
 /// The configure/pool round trips wait at most this long for the compositor.
 const WINDOW_TIMEOUT: Duration = Duration::from_secs(2);
+/// Seat capabilities arrive on bind; wait no longer than this for them.
+const SEAT_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[repr(C)]
 struct PollFd {
@@ -79,7 +90,6 @@ extern "C" {
     fn dlerror() -> *mut c_char;
     fn dlclose(handle: *mut c_void) -> c_int;
     fn send(fd: c_int, buffer: *const c_void, len: usize, flags: c_int) -> isize;
-    fn recv(fd: c_int, buffer: *mut c_void, len: usize, flags: c_int) -> isize;
     fn poll(fds: *mut PollFd, nfds: c_ulong, timeout: c_int) -> c_int;
 }
 
@@ -148,6 +158,29 @@ unsafe fn symbol<T>(handle: *mut c_void, name: &[u8]) -> Result<T, AdapterError>
     // POSIX permits a void* symbol address to be used as a function pointer;
     // on Linux both representations have the same size.
     Ok(std::mem::transmute_copy::<*mut c_void, T>(&pointer))
+}
+
+/// Pointer events inside one `wl_pointer.frame` are double-buffered by the
+/// protocol: position, button transitions and scroll amounts accumulate here
+/// and are submitted as ABI events only when `frame` arrives (or immediately
+/// on a pre-v5 seat, which has no frame event).
+#[derive(Default)]
+struct PointerFrame {
+    surface: u32,
+    position: Option<(f32, f32)>,
+    moved: bool,
+    buttons: Vec<(u32, bool)>,
+    axes: Vec<f32>,
+}
+
+impl PointerFrame {
+    fn clear(&mut self) {
+        self.surface = 0;
+        self.position = None;
+        self.moved = false;
+        self.buttons.clear();
+        self.axes.clear();
+    }
 }
 
 /// The single live window's protocol objects and its double-buffered shm
@@ -219,12 +252,25 @@ pub struct WaylandHost {
     configure_serial: Option<u32>,
     configure_size: Option<Size>,
     window: Option<WaylandWindow>,
+    /// Seat capabilities bitmask, once announced (pointer=1, keyboard=2).
+    seat_capabilities: Option<u32>,
+    seat_version: u32,
+    keyboard_focus: bool,
+    pointer_frame: PointerFrame,
+    /// Buttons held between frames, for drag classification.
+    pointer_buttons: Vec<u32>,
+    /// SCM_RIGHTS descriptors received with stream messages; the stream
+    /// layer owns them and closes any the consumer does not take.
+    incoming_fds: VecDeque<i32>,
 }
 
 /// Bound ids of the window's protocol chain, shared by the event pump and
 /// `open_window`; their object ids are known before the window is mapped.
 #[derive(Clone, Copy, Default)]
 struct ServerIds {
+    seat: u32,
+    pointer: u32,
+    keyboard: u32,
     compositor: u32,
     shm: u32,
     wm_base: u32,
@@ -278,6 +324,12 @@ impl WaylandHost {
             configure_serial: None,
             configure_size: None,
             window: None,
+            seat_capabilities: None,
+            seat_version: 0,
+            keyboard_focus: false,
+            pointer_frame: PointerFrame::default(),
+            pointer_buttons: Vec::new(),
+            incoming_fds: VecDeque::new(),
         })
     }
 
@@ -355,7 +407,7 @@ impl WaylandHost {
             if Instant::now() >= deadline {
                 return Err(AdapterError::Backend(WAYLAND_TIMEOUT));
             }
-            Self::read_more(self.fd, &mut self.buffer)?;
+            Self::read_more(self.fd, &mut self.buffer, &mut self.incoming_fds)?;
         }
         if unsafe { (self.lib.get_error)(self.display) } != 0 {
             return Err(AdapterError::Backend(WAYLAND_DISPLAY_ERROR));
@@ -371,14 +423,114 @@ impl WaylandHost {
     /// compositor's own protocol messages. An idle socket waits at most one
     /// 100 ms poll tick. Returns how many input events were queued.
     pub fn pump_input(&mut self) -> Result<usize, AdapterError> {
-        Self::read_more(self.fd, &mut self.buffer)?;
+        Self::read_more(self.fd, &mut self.buffer, &mut self.incoming_fds)?;
         let mut queued = 0usize;
         let mut offset = 0usize;
         while let Some((header, body, size)) = next_event(&self.buffer[offset..])? {
             if header.object_id == DISPLAY_ID && header.opcode == WL_DISPLAY_ERROR_EVENT {
                 return Err(AdapterError::Backend(WAYLAND_DISPLAY_ERROR));
             }
-            if header.object_id == self.text_id && self.text_id != 0 {
+            if header.object_id == self.server_ids.seat && self.server_ids.seat != 0 {
+                // wl_seat.capabilities is the seat's first event and carries
+                // one bitmask word (pointer=1, keyboard=2).
+                if header.opcode == 0 {
+                    if body.len() != 4 {
+                        return Err(AdapterError::Backend(WAYLAND_INPUT_ERROR));
+                    }
+                    self.seat_capabilities = Some(decode_xdg_configure_serial(body)?);
+                }
+            } else if header.object_id == self.server_ids.pointer && self.server_ids.pointer != 0 {
+                match header.opcode {
+                    WL_POINTER_ENTER => {
+                        let (_, surface, x, y) = decode_pointer_enter(body)?;
+                        let ours = self.is_our_surface(surface);
+                        let frame = &mut self.pointer_frame;
+                        frame.surface = surface;
+                        frame.position = Some((fixed_to_f32(x), fixed_to_f32(y)));
+                        if !ours {
+                            frame.surface = 0;
+                        }
+                    }
+                    WL_POINTER_LEAVE => {
+                        let surface = decode_pointer_leave(body)?;
+                        if self.is_our_surface(surface) {
+                            self.pointer_frame.clear();
+                            self.pointer_buttons.clear();
+                        }
+                    }
+                    WL_POINTER_MOTION => {
+                        let (x, y) = decode_pointer_motion(body)?;
+                        if self.pointer_frame.surface != 0 {
+                            self.pointer_frame.position = Some((fixed_to_f32(x), fixed_to_f32(y)));
+                            self.pointer_frame.moved = true;
+                        }
+                    }
+                    WL_POINTER_BUTTON => {
+                        let (button, state) = decode_pointer_button(body)?;
+                        if self.pointer_frame.surface != 0 {
+                            let down = state == WL_BUTTON_PRESSED;
+                            self.pointer_frame.buttons.push((button, down));
+                            self.pointer_buttons.retain(|held| *held != button);
+                            if down {
+                                self.pointer_buttons.push(button);
+                            }
+                        }
+                    }
+                    WL_POINTER_AXIS => {
+                        let (axis, value) = decode_pointer_axis(body)?;
+                        if self.pointer_frame.surface != 0 && axis == WL_POINTER_AXIS_VERTICAL {
+                            // Horizontal scroll has no ABI axis yet.
+                            self.pointer_frame
+                                .axes
+                                .push(input_map::wayland_wheel_delta(value));
+                        }
+                    }
+                    WL_POINTER_FRAME => {
+                        decode_empty_event(body)?;
+                    }
+                    _ => {}
+                }
+                // v5+ groups events into one frame; older seats have no
+                // frame event and must be submitted per event.
+                if self.seat_version < 5 || header.opcode == WL_POINTER_FRAME {
+                    queued += self.submit_pointer_frame();
+                }
+            } else if header.object_id == self.server_ids.keyboard && self.server_ids.keyboard != 0
+            {
+                match header.opcode {
+                    WL_KEYBOARD_KEYMAP => {
+                        let (_format, _size) = decode_keyboard_keymap(body)?;
+                        // The keymap fd rides SCM_RIGHTS in this message.
+                        // Take it once and close it: real keymap parsing is a
+                        // follow-up, and no descriptor may be leaked.
+                        if let Some(fd) = self.incoming_fds.pop_front() {
+                            unsafe { libc::close(fd) };
+                        }
+                    }
+                    WL_KEYBOARD_ENTER => {
+                        let surface = decode_keyboard_enter(body)?;
+                        self.keyboard_focus = self.is_our_surface(surface);
+                    }
+                    WL_KEYBOARD_LEAVE => {
+                        let surface = decode_keyboard_leave(body)?;
+                        if self.is_our_surface(surface) {
+                            self.keyboard_focus = false;
+                        }
+                    }
+                    WL_KEYBOARD_KEY => {
+                        let (code, state) = decode_keyboard_key(body)?;
+                        if self.keyboard_focus {
+                            self.events.push_back(InputEvent::Key {
+                                code,
+                                pressed: state == WL_KEY_PRESSED,
+                            });
+                            queued += 1;
+                        }
+                    }
+                    // modifiers and v4 repeat_info have no ABI channel yet.
+                    _ => {}
+                }
+            } else if header.object_id == self.text_id && self.text_id != 0 {
                 if let Some(text) = self.composer.feed(header.opcode, body)? {
                     self.events.push_back(InputEvent::Input {
                         node_id: u32::MAX,
@@ -500,26 +652,17 @@ impl WaylandHost {
     }
 
     fn arm_ime(&mut self) -> Result<ImeStatus, AdapterError> {
-        let Some((seat_name, seat_version)) = self.seat_global else {
-            return Ok(ImeStatus::Unavailable(
-                "the compositor does not announce wl_seat",
-            ));
+        let Some(seat_id) = self.ensure_seat()? else {
+            return Ok(ImeStatus::Unavailable(WAYLAND_NO_SEAT));
         };
         let Some((manager_name, manager_version)) = self.text_manager else {
             return Ok(ImeStatus::Unavailable(
                 "the compositor does not announce zwp_text_input_manager_v3",
             ));
         };
-        let seat_id = self.ids.allocate()?;
         let manager_id = self.ids.allocate()?;
         let text_id = self.ids.allocate()?;
-        let mut bytes = encode_registry_bind(
-            self.registry_id,
-            seat_name,
-            "wl_seat",
-            seat_version,
-            seat_id,
-        )?;
+        let mut bytes = Vec::new();
         bytes.extend(encode_registry_bind(
             self.registry_id,
             manager_name,
@@ -583,7 +726,11 @@ impl WaylandHost {
         Ok(())
     }
 
-    fn read_more(fd: c_int, buffer: &mut Vec<u8>) -> Result<(), AdapterError> {
+    fn read_more(
+        fd: c_int,
+        buffer: &mut Vec<u8>,
+        incoming: &mut VecDeque<i32>,
+    ) -> Result<(), AdapterError> {
         let mut fds = PollFd {
             fd,
             events: POLLIN,
@@ -598,13 +745,13 @@ impl WaylandHost {
             return Ok(());
         }
         let mut chunk = [0u8; 4096];
-        // SAFETY: the chunk is a valid writable buffer of the given length.
-        let count = unsafe { recv(fd, chunk.as_mut_ptr().cast::<c_void>(), chunk.len(), 0) };
-        if count < 0 {
-            return Err(AdapterError::Backend(WAYLAND_READ_ERROR));
-        }
+        // recvmsg keeps SCM_RIGHTS descriptors that plain recv() would drop:
+        // the wl_keyboard.keymap fd and any future pool fd must be owned here.
+        let (count, passed) = recvmsg_with_fds(fd, &mut chunk)
+            .map_err(|_| AdapterError::Backend(WAYLAND_READ_ERROR))?;
+        incoming.extend(passed);
         if count > 0 {
-            buffer.extend_from_slice(&chunk[..count as usize]);
+            buffer.extend_from_slice(&chunk[..count]);
         }
         Ok(())
     }
@@ -639,6 +786,104 @@ fn anonymous_pool(len: usize) -> Result<(i32, *mut u8), AdapterError> {
 }
 
 impl WaylandHost {
+    /// Bind the first announced seat once, shared by text input, pointer and
+    /// keyboard. `None` means the compositor announced no seat at all.
+    fn ensure_seat(&mut self) -> Result<Option<u32>, AdapterError> {
+        if self.server_ids.seat != 0 {
+            return Ok(Some(self.server_ids.seat));
+        }
+        let Some((name, version)) = self.seat_global else {
+            return Ok(None);
+        };
+        let id = self.ids.allocate()?;
+        self.write_all(&encode_registry_bind(
+            self.registry_id,
+            name,
+            "wl_seat",
+            version,
+            id,
+        )?)?;
+        self.server_ids.seat = id;
+        self.seat_version = version;
+        Ok(Some(id))
+    }
+
+    /// Bind `wl_pointer` and `wl_keyboard` from the seat's announced
+    /// capabilities; their events then flow through `poll_input`. A seat
+    /// without a device simply produces no events for it.
+    pub fn open_input(&mut self) -> Result<(), AdapterError> {
+        let Some(seat_id) = self.ensure_seat()? else {
+            return Err(AdapterError::Backend(WAYLAND_NO_SEAT));
+        };
+        let deadline = Instant::now() + SEAT_TIMEOUT;
+        while self.seat_capabilities.is_none() {
+            if Instant::now() >= deadline {
+                return Err(AdapterError::Backend(WAYLAND_SEAT_TIMEOUT));
+            }
+            self.pump_input()?;
+        }
+        let capabilities = self.seat_capabilities.expect("checked above");
+        // wl_seat.capability: pointer = 1, keyboard = 2.
+        if capabilities & 1 != 0 && self.server_ids.pointer == 0 {
+            let id = self.ids.allocate()?;
+            self.write_all(&encode_seat_device(seat_id, WL_SEAT_GET_POINTER, id)?)?;
+            self.server_ids.pointer = id;
+        }
+        if capabilities & 2 != 0 && self.server_ids.keyboard == 0 {
+            let id = self.ids.allocate()?;
+            self.write_all(&encode_seat_device(seat_id, WL_SEAT_GET_KEYBOARD, id)?)?;
+            self.server_ids.keyboard = id;
+        }
+        Ok(())
+    }
+
+    /// The routing seam for S3: one surface now, a per-surface lookup later.
+    fn is_our_surface(&self, surface: u32) -> bool {
+        self.window
+            .as_ref()
+            .is_some_and(|window| window.surface_id == surface)
+    }
+
+    /// Submit one frame's accumulated pointer state to the ABI stream.
+    fn submit_pointer_frame(&mut self) -> usize {
+        let frame = std::mem::take(&mut self.pointer_frame);
+        if frame.surface == 0 || !self.is_our_surface(frame.surface) {
+            return 0;
+        }
+        let mut queued = 0;
+        let pressed = !self.pointer_buttons.is_empty();
+        if let (Some((x, y)), true) = (frame.position, frame.moved) {
+            self.events
+                .push_back(input_map::pointer_move(pressed, x, y));
+            queued += 1;
+        }
+        for (button, down) in frame.buttons {
+            // shortcut: secondary buttons have no ABI code yet; only the
+            // primary button maps to Tap/PointerUp.
+            if button != WL_POINTER_PRIMARY {
+                continue;
+            }
+            if let Some((x, y)) = frame.position {
+                self.events.push_back(if down {
+                    InputEvent::Tap {
+                        x,
+                        y,
+                        node_id: u32::MAX,
+                    }
+                } else {
+                    InputEvent::PointerUp { x, y }
+                });
+                queued += 1;
+            }
+        }
+        for delta in frame.axes {
+            let (x, y) = frame.position.unwrap_or((0.0, 0.0));
+            self.events.push_back(InputEvent::Wheel { x, y, delta });
+            queued += 1;
+        }
+        queued
+    }
+
     /// Open a real xdg-shell window. The compositor must announce
     /// `wl_compositor`, `wl_shm` and `xdg_wm_base`; without one of them the
     /// host reports a typed reason instead of inventing a surface.
@@ -894,6 +1139,9 @@ fn checked_window_size(size: Size) -> Result<(), AdapterError> {
 
 impl Drop for WaylandHost {
     fn drop(&mut self) {
+        for fd in self.incoming_fds.drain(..) {
+            unsafe { libc::close(fd) };
+        }
         self.teardown_window();
         if !self.display.is_null() {
             // SAFETY: the display came from wl_display_connect and is closed once.

@@ -69,6 +69,27 @@ pub const XDG_TOPLEVEL_CONFIGURE: u16 = 0;
 pub const XDG_TOPLEVEL_CLOSE: u16 = 1;
 
 /// `wl_shm.format`: 32-bit native-endian A:R:G:B 8:8:8:8, four bytes per pixel.
+// wl_seat requests: get_pointer, get_keyboard, get_touch, then release (v5).
+pub const WL_SEAT_GET_POINTER: u16 = 0;
+pub const WL_SEAT_GET_KEYBOARD: u16 = 1;
+// wl_pointer events: enter, leave, motion, button, axis, frame (v5), ...
+pub const WL_POINTER_ENTER: u16 = 0;
+pub const WL_POINTER_LEAVE: u16 = 1;
+pub const WL_POINTER_MOTION: u16 = 2;
+pub const WL_POINTER_BUTTON: u16 = 3;
+pub const WL_POINTER_AXIS: u16 = 4;
+pub const WL_POINTER_FRAME: u16 = 5;
+// wl_keyboard events: keymap, enter, leave, key, modifiers, ...
+pub const WL_KEYBOARD_KEYMAP: u16 = 0;
+pub const WL_KEYBOARD_ENTER: u16 = 1;
+pub const WL_KEYBOARD_LEAVE: u16 = 2;
+pub const WL_KEYBOARD_KEY: u16 = 3;
+// wl_pointer.axis enum: 0 is vertical, 1 horizontal; state enums: 1 is down.
+pub const WL_POINTER_AXIS_VERTICAL: u32 = 0;
+pub const WL_BUTTON_PRESSED: u32 = 1;
+pub const WL_KEY_PRESSED: u32 = 1;
+pub const WL_POINTER_PRIMARY: u32 = 0x110;
+
 pub const WL_SHM_FORMAT_ARGB8888: u32 = 0;
 /// `wl_shm.format`: 32-bit native-endian x:R:G:B 8:8:8:8, four bytes per pixel.
 pub const WL_SHM_FORMAT_XRGB8888: u32 = 1;
@@ -270,6 +291,114 @@ pub fn encode_registry_bind(
     body.extend_from_slice(&version.to_ne_bytes());
     body.extend_from_slice(&new_id.to_ne_bytes());
     encode_message(registry_id, WL_REGISTRY_BIND, &body)
+}
+
+/// `wl_seat.get_pointer(new_id)` and `wl_seat.get_keyboard(new_id)`.
+pub fn encode_seat_device(
+    seat_id: u32,
+    opcode: u16,
+    device_id: u32,
+) -> Result<Vec<u8>, AdapterError> {
+    encode_message(seat_id, opcode, &device_id.to_ne_bytes())
+}
+
+fn word_at(body: &[u8], at: usize) -> Result<u32, AdapterError> {
+    let slice = body
+        .get(at..at + 4)
+        .ok_or(AdapterError::Backend(BAD_INPUT_BODY))?;
+    Ok(u32::from_ne_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+/// Wayland fixed-point 24.8 coordinates and scroll amounts are signed and
+/// divided by 256 to become logical pixels or notches.
+pub fn fixed_to_f32(raw: i32) -> f32 {
+    raw as f32 / 256.0
+}
+
+/// `wl_pointer.enter(serial, surface, surface_x, surface_y)`.
+pub fn decode_pointer_enter(body: &[u8]) -> Result<(u32, u32, i32, i32), AdapterError> {
+    if body.len() != 16 {
+        return Err(AdapterError::Backend(BAD_INPUT_BODY));
+    }
+    Ok((
+        word_at(body, 0)?,
+        word_at(body, 4)?,
+        word_at(body, 8)? as i32,
+        word_at(body, 12)? as i32,
+    ))
+}
+
+/// `wl_pointer.leave(serial, surface)` returns the surface that lost focus.
+pub fn decode_pointer_leave(body: &[u8]) -> Result<u32, AdapterError> {
+    if body.len() != 8 {
+        return Err(AdapterError::Backend(BAD_INPUT_BODY));
+    }
+    word_at(body, 4)
+}
+
+/// `wl_pointer.motion(time, surface_x, surface_y)`.
+pub fn decode_pointer_motion(body: &[u8]) -> Result<(i32, i32), AdapterError> {
+    if body.len() != 8 {
+        return Err(AdapterError::Backend(BAD_INPUT_BODY));
+    }
+    Ok((word_at(body, 0)? as i32, word_at(body, 4)? as i32))
+}
+
+/// `wl_pointer.button(serial, time, button, state)`.
+pub fn decode_pointer_button(body: &[u8]) -> Result<(u32, u32), AdapterError> {
+    if body.len() != 16 {
+        return Err(AdapterError::Backend(BAD_INPUT_BODY));
+    }
+    Ok((word_at(body, 8)?, word_at(body, 12)?))
+}
+
+/// `wl_pointer.axis(time, axis, value)`: the axis enum and the signed 24.8
+/// value. A positive vertical value scrolls down, away from the ABI's
+/// positive wheel direction.
+pub fn decode_pointer_axis(body: &[u8]) -> Result<(u32, i32), AdapterError> {
+    if body.len() != 12 {
+        return Err(AdapterError::Backend(BAD_INPUT_BODY));
+    }
+    Ok((word_at(body, 4)?, word_at(body, 8)? as i32))
+}
+
+/// `wl_keyboard.keymap(format, fd, size)` returns format and size; the fd
+/// arrives as SCM_RIGHTS and is owned by the stream layer.
+pub fn decode_keyboard_keymap(body: &[u8]) -> Result<(u32, u32), AdapterError> {
+    if body.len() != 12 {
+        return Err(AdapterError::Backend(BAD_INPUT_BODY));
+    }
+    Ok((word_at(body, 0)?, word_at(body, 8)?))
+}
+
+/// `wl_keyboard.enter(serial, surface, keys[])` returns the focused surface
+/// and validates the array's word padding.
+pub fn decode_keyboard_enter(body: &[u8]) -> Result<u32, AdapterError> {
+    if body.len() < 12 {
+        return Err(AdapterError::Backend(BAD_INPUT_BODY));
+    }
+    let keys_len = word_at(body, 8)? as usize;
+    if body.len() != 12 + word_align(keys_len)? {
+        return Err(AdapterError::Backend(BAD_INPUT_BODY));
+    }
+    word_at(body, 4)
+}
+
+/// `wl_keyboard.leave(serial, surface)` returns the surface that lost focus.
+pub fn decode_keyboard_leave(body: &[u8]) -> Result<u32, AdapterError> {
+    if body.len() != 8 {
+        return Err(AdapterError::Backend(BAD_INPUT_BODY));
+    }
+    word_at(body, 4)
+}
+
+/// `wl_keyboard.key(serial, time, key, state)` returns the raw key code and
+/// the press state (1 is pressed).
+pub fn decode_keyboard_key(body: &[u8]) -> Result<(u32, u32), AdapterError> {
+    if body.len() != 16 {
+        return Err(AdapterError::Backend(BAD_INPUT_BODY));
+    }
+    Ok((word_at(body, 8)?, word_at(body, 12)?))
 }
 
 /// `wl_compositor.create_surface(new_id)`.
@@ -538,6 +667,7 @@ const BAD_GEOMETRY: &str = "Wayland display geometry event is invalid";
 const BAD_LAYOUT_PATCH: &str = "Wayland layout patch event is invalid";
 const BAD_GRAPHICS_BACKEND: &str = "graphics backend capability event is invalid";
 const BAD_XDG_BODY: &str = "the xdg-shell event body does not match its opcode";
+const BAD_INPUT_BODY: &str = "the wl_pointer/wl_keyboard event body does not match its opcode";
 
 impl WireEvent {
     /// Two-word input/resize messages need no padding; geometry and its layout
@@ -1052,26 +1182,64 @@ pub fn send_with_fd(socket: i32, bytes: &[u8], fd: i32) -> Result<(), AdapterErr
 /// Receive one SCM_RIGHTS descriptor alongside a message and hand back the
 /// owned fd (the caller closes it exactly once).
 #[cfg(unix)]
-pub fn recv_with_fd(socket: i32, bytes: &mut [u8]) -> Result<(usize, i32), AdapterError> {
+/// Receive one message and every SCM_RIGHTS descriptor it carries. The caller
+/// owns the returned fds and must close each one exactly once.
+#[cfg(unix)]
+pub fn recvmsg_with_fds(socket: i32, bytes: &mut [u8]) -> Result<(usize, Vec<i32>), AdapterError> {
     const BAD_FD_RECV: &str = "the file descriptor could not be received";
     let mut iov = libc::iovec {
         iov_base: bytes.as_mut_ptr().cast::<libc::c_void>(),
         iov_len: bytes.len(),
     };
-    let mut control: FdCmsg = unsafe { std::mem::zeroed() };
+    // 256 bytes of aligned control space: several one-fd cmsgs fit, and any
+    // descriptor that arrives here is owned by the caller.
+    let mut control = [0u64; 32];
     let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
     message.msg_iov = &mut iov;
     message.msg_iovlen = 1;
-    message.msg_control = (&mut control as *mut FdCmsg).cast();
-    message.msg_controllen = fd_control_space() as _;
+    message.msg_control = control.as_mut_ptr().cast::<libc::c_void>();
+    message.msg_controllen = std::mem::size_of_val(&control) as _;
     let read = unsafe { libc::recvmsg(socket, &mut message, 0) };
-    if read <= 0
-        || control.header.cmsg_level != libc::SOL_SOCKET
-        || control.header.cmsg_type != libc::SCM_RIGHTS
-    {
+    if read <= 0 {
         return Err(AdapterError::Backend(BAD_FD_RECV));
     }
-    Ok((read as usize, control.fd))
+    let header_size = std::mem::size_of::<libc::cmsghdr>();
+    let start = message.msg_control as *const u8;
+    let end = unsafe { start.add(message.msg_controllen as usize) };
+    let mut cursor = start;
+    let mut fds = Vec::new();
+    while (cursor as usize) + header_size <= end as usize {
+        let header = unsafe { &*(cursor as *const libc::cmsghdr) };
+        let total = header.cmsg_len as usize;
+        if total < header_size || (cursor as usize) + total > end as usize {
+            break;
+        }
+        if header.cmsg_level == libc::SOL_SOCKET && header.cmsg_type == libc::SCM_RIGHTS {
+            let data = unsafe { cursor.add(header_size) };
+            let count = (total - header_size) / std::mem::size_of::<i32>();
+            for index in 0..count {
+                fds.push(unsafe { *(data.add(index * 4) as *const i32) });
+            }
+        }
+        let align = std::mem::size_of::<usize>();
+        cursor = unsafe { cursor.add((total + align - 1) & !(align - 1)) };
+    }
+    Ok((read as usize, fds))
+}
+
+/// Receive one message carrying exactly one fd. Any other fd count is an
+/// error, and every descriptor received is closed before returning it.
+#[cfg(unix)]
+pub fn recv_with_fd(socket: i32, bytes: &mut [u8]) -> Result<(usize, i32), AdapterError> {
+    const BAD_FD_RECV: &str = "the file descriptor could not be received";
+    let (read, fds) = recvmsg_with_fds(socket, bytes)?;
+    if fds.len() == 1 {
+        return Ok((read, fds[0]));
+    }
+    for fd in fds {
+        unsafe { libc::close(fd) };
+    }
+    Err(AdapterError::Backend(BAD_FD_RECV))
 }
 
 #[cfg(test)]
@@ -1107,6 +1275,85 @@ mod tests {
             libc::close(pair[0]);
             libc::close(pair[1]);
         }
+    }
+
+    #[test]
+    fn seat_device_requests_carry_the_new_id() {
+        let pointer = encode_seat_device(4, WL_SEAT_GET_POINTER, 5).unwrap();
+        let parsed = decode_header(&pointer).unwrap();
+        assert_eq!((parsed.object_id, parsed.opcode), (4, 0));
+        assert_eq!(&pointer[8..], 5u32.to_ne_bytes());
+        let keyboard = encode_seat_device(4, WL_SEAT_GET_KEYBOARD, 6).unwrap();
+        assert_eq!(decode_header(&keyboard).unwrap().opcode, 1);
+        assert_eq!(&keyboard[8..], 6u32.to_ne_bytes());
+    }
+
+    #[test]
+    fn pointer_events_decode_word_for_word() {
+        let mut body = Vec::new();
+        for word in [9u32, 3, 256, 512] {
+            body.extend_from_slice(&word.to_ne_bytes());
+        }
+        assert_eq!(decode_pointer_enter(&body).unwrap(), (9, 3, 256, 512));
+        assert!(decode_pointer_enter(&body[..12]).is_err());
+
+        let mut body = Vec::new();
+        body.extend_from_slice(&9u32.to_ne_bytes());
+        body.extend_from_slice(&3u32.to_ne_bytes());
+        assert_eq!(decode_pointer_leave(&body).unwrap(), 3);
+        assert_eq!(decode_pointer_motion(&body).unwrap(), (9i32, 3i32));
+        assert!(decode_pointer_leave(&[0u8; 12]).is_err());
+
+        let mut body = Vec::new();
+        for word in [1u32, 2, WL_POINTER_PRIMARY, WL_BUTTON_PRESSED] {
+            body.extend_from_slice(&word.to_ne_bytes());
+        }
+        assert_eq!(
+            decode_pointer_button(&body).unwrap(),
+            (WL_POINTER_PRIMARY, WL_BUTTON_PRESSED)
+        );
+        assert!(decode_pointer_button(&body[..12]).is_err());
+
+        let mut body = Vec::new();
+        body.extend_from_slice(&2u32.to_ne_bytes());
+        body.extend_from_slice(&WL_POINTER_AXIS_VERTICAL.to_ne_bytes());
+        body.extend_from_slice(&(-256i32).to_ne_bytes());
+        assert_eq!(decode_pointer_axis(&body).unwrap(), (0, -256));
+        assert_eq!(fixed_to_f32(256), 1.0);
+        assert_eq!(fixed_to_f32(-128), -0.5);
+    }
+
+    fn keyboard_key_body() -> Vec<u8> {
+        let mut body = Vec::new();
+        for word in [7u32, 2, 48, WL_KEY_PRESSED] {
+            body.extend_from_slice(&word.to_ne_bytes());
+        }
+        body
+    }
+
+    #[test]
+    fn keyboard_events_decode_word_for_word() {
+        let mut keymap = Vec::new();
+        for word in [1u32, 9, 48] {
+            keymap.extend_from_slice(&word.to_ne_bytes());
+        }
+        assert_eq!(decode_keyboard_keymap(&keymap).unwrap(), (1, 48));
+        assert_eq!(decode_keyboard_key(&keyboard_key_body()).unwrap(), (48, 1));
+        assert!(decode_keyboard_keymap(&keymap[..8]).is_err());
+
+        let mut enter = Vec::new();
+        enter.extend_from_slice(&7u32.to_ne_bytes());
+        enter.extend_from_slice(&3u32.to_ne_bytes());
+        enter.extend_from_slice(&0u32.to_ne_bytes()); // no pressed keys
+        assert_eq!(decode_keyboard_enter(&enter).unwrap(), 3);
+        enter.extend_from_slice(&[1]); // trailing padding breaks the length
+        assert!(decode_keyboard_enter(&enter).is_err());
+
+        let mut leave = Vec::new();
+        leave.extend_from_slice(&7u32.to_ne_bytes());
+        leave.extend_from_slice(&3u32.to_ne_bytes());
+        assert_eq!(decode_keyboard_leave(&leave).unwrap(), 3);
+        assert!(decode_keyboard_leave(&[0u8; 12]).is_err());
     }
 
     #[test]

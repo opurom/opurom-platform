@@ -3,7 +3,8 @@
 //! can exercise without a window server.
 
 use opurom_platform::input_map::{
-    dpi_from_millimeters, dpi_scale, pointer_move, wheel_delta, wire_input, x11_scroll_notch,
+    dpi_from_millimeters, dpi_scale, pointer_move, wayland_wheel_delta, wheel_delta, wire_input,
+    x11_scroll_notch,
 };
 use opurom_platform::wayland_wire::{decode_event, WireEvent};
 use opurom_platform::InputEvent;
@@ -23,6 +24,13 @@ fn a_move_is_a_drag_only_while_a_button_is_held() {
 }
 
 // ---------------------------------------------------------------- wheel
+
+#[test]
+fn wayland_scroll_values_flip_into_notches() {
+    assert_eq!(wayland_wheel_delta(-256), 1.0);
+    assert_eq!(wayland_wheel_delta(256), -1.0);
+    assert_eq!(wayland_wheel_delta(-128), 0.5);
+}
 
 #[test]
 fn wheel_notches_are_normalized_from_raw_units() {
