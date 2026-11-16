@@ -293,7 +293,14 @@ fn desktop_matrix_names_every_capability_once() {
     caps.sort();
     assert_eq!(
         caps,
-        vec!["audio", "crypto", "filesystem", "global_hotkey", "storage", "tray"]
+        vec![
+            "audio",
+            "crypto",
+            "filesystem",
+            "global_hotkey",
+            "storage",
+            "tray"
+        ]
     );
     // The filesystem scanner, storage and crypto parse/serve real data everywhere,
     // so they are native on every build; tray/hotkey/audio vary by target.

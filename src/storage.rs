@@ -58,8 +58,7 @@ impl Storage {
     /// Open (creating if needed) a store rooted at `root`.
     pub fn open(root: impl Into<PathBuf>) -> Result<Storage, StorageError> {
         let root = root.into();
-        fs::create_dir_all(root.join("objects"))
-            .map_err(|e| StorageError::Io(e.to_string()))?;
+        fs::create_dir_all(root.join("objects")).map_err(|e| StorageError::Io(e.to_string()))?;
         Ok(Storage { root })
     }
 
@@ -80,7 +79,8 @@ impl Storage {
         if text.trim().is_empty() {
             return Ok(BTreeMap::new());
         }
-        parse_string_map(&text).ok_or_else(|| StorageError::Io("kv.json is not a string map".into()))
+        parse_string_map(&text)
+            .ok_or_else(|| StorageError::Io("kv.json is not a string map".into()))
     }
 
     fn write_kv(&self, map: &BTreeMap<String, String>) -> Result<(), StorageError> {
@@ -175,7 +175,9 @@ impl Storage {
         if !path.is_file() {
             return Ok(None);
         }
-        fs::read_to_string(path).map(Some).map_err(|e| StorageError::Io(e.to_string()))
+        fs::read_to_string(path)
+            .map(Some)
+            .map_err(|e| StorageError::Io(e.to_string()))
     }
 
     /// The directory this store writes to.
@@ -364,9 +366,15 @@ fn parse_array(bytes: &[u8], start: usize) -> Option<(String, usize)> {
 
 fn parse_scalar(bytes: &[u8], start: usize) -> Option<(String, usize)> {
     let mut i = start;
-    while matches!(bytes.get(i), Some(b'-' | b'+' | b'.' | b'e' | b'E') | Some(b'0'..=b'9')
-        | Some(b't') | Some(b'f') | Some(b'n') | Some(b'a'..=b'z'))
-    {
+    while matches!(
+        bytes.get(i),
+        Some(b'-' | b'+' | b'.' | b'e' | b'E')
+            | Some(b'0'..=b'9')
+            | Some(b't')
+            | Some(b'f')
+            | Some(b'n')
+            | Some(b'a'..=b'z')
+    ) {
         i += 1;
     }
     if i == start {

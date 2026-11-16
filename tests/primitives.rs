@@ -5,7 +5,8 @@
 use std::path::PathBuf;
 
 use opurom_platform::crypto::{
-    aes_gcm_open, aes_gcm_seal, secure_random, secure_random_nonce, sha256_hex, CryptoError, KEY_LEN,
+    aes_gcm_open, aes_gcm_seal, secure_random, secure_random_nonce, sha256_hex, CryptoError,
+    KEY_LEN,
 };
 use opurom_platform::storage::Storage;
 
@@ -52,7 +53,12 @@ fn list_is_sorted_and_covers_kv_and_objects() {
 fn object_round_trip_is_canonical_json() {
     let store = Storage::open(temp_root("obj")).unwrap();
     // Insertion order differs from canonical order; the store sorts keys.
-    store.set_object("cfg", r#"{ "z": 1, "a": [true, null, -2.5], "m": {"y":"x"} }"#).unwrap();
+    store
+        .set_object(
+            "cfg",
+            r#"{ "z": 1, "a": [true, null, -2.5], "m": {"y":"x"} }"#,
+        )
+        .unwrap();
     let stored = store.get_object("cfg").unwrap().unwrap();
     assert_eq!(stored, r#"{"a":[true,null,-2.5],"m":{"y":"x"},"z":1}"#);
     assert_eq!(store.get_object("absent").unwrap(), None);
@@ -111,10 +117,22 @@ fn aes_gcm_rejects_tamper_and_bad_lengths() {
     let mut sealed = aes_gcm_seal(&key, &nonce, b"payload").unwrap();
     let last = sealed.len() - 1;
     sealed[last] ^= 0xFF;
-    assert_eq!(aes_gcm_open(&key, &nonce, &sealed), Err(CryptoError::BadCiphertext));
-    assert_eq!(aes_gcm_seal(&[0u8; 31], &nonce, b"x"), Err(CryptoError::BadKeyLen));
-    assert_eq!(aes_gcm_seal(&key, &[0u8; 8], b"x"), Err(CryptoError::BadNonceLen));
-    assert_eq!(aes_gcm_open(&key, &nonce, b"short"), Err(CryptoError::BadCiphertext));
+    assert_eq!(
+        aes_gcm_open(&key, &nonce, &sealed),
+        Err(CryptoError::BadCiphertext)
+    );
+    assert_eq!(
+        aes_gcm_seal(&[0u8; 31], &nonce, b"x"),
+        Err(CryptoError::BadKeyLen)
+    );
+    assert_eq!(
+        aes_gcm_seal(&key, &[0u8; 8], b"x"),
+        Err(CryptoError::BadNonceLen)
+    );
+    assert_eq!(
+        aes_gcm_open(&key, &nonce, b"short"),
+        Err(CryptoError::BadCiphertext)
+    );
 }
 
 #[test]
@@ -134,5 +152,8 @@ fn sealed_message_round_trips_with_a_random_nonce() {
     let key = [3u8; KEY_LEN];
     let nonce = secure_random_nonce().unwrap();
     let sealed = aes_gcm_seal(&key, &nonce, b"offline app state").unwrap();
-    assert_eq!(aes_gcm_open(&key, &nonce, &sealed).unwrap(), b"offline app state");
+    assert_eq!(
+        aes_gcm_open(&key, &nonce, &sealed).unwrap(),
+        b"offline app state"
+    );
 }

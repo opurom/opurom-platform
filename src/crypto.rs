@@ -70,7 +70,11 @@ fn nonce(value: &[u8]) -> Result<Nonce, CryptoError> {
 /// Seal `plaintext` under `key` with `nonce`, returning `ciphertext || tag`. The
 /// caller owns nonce uniqueness: a repeated (key, nonce) pair breaks GCM, so use
 /// [`secure_random_nonce`] for real messages and a fixed nonce only in tests.
-pub fn aes_gcm_seal(key: &[u8], nonce_bytes: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+pub fn aes_gcm_seal(
+    key: &[u8],
+    nonce_bytes: &[u8],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
     let key = aead_key(key)?;
     let nonce = nonce(nonce_bytes)?;
     let mut in_out = plaintext.to_vec();
