@@ -222,11 +222,13 @@ impl MacHost {
 
     /// Live-window entry point. It creates a real `NSWindow` with an `NSView`
     /// and a `CAMetalLayer`, draws `frame` into it, runs the AppKit event loop
-    /// briefly and captures the window's own pixels.
+    /// briefly and captures the window's own pixels. Opening queues the ABI's
+    /// build-time `Scale` (the window's `backingScaleFactor`) on the host's
+    /// event stream.
     ///
     /// It needs a GUI-capable macOS main thread; a headless host gets an
     /// `AdapterError::Backend` with the concrete reason instead of a window.
-    pub fn open_window(&self) -> Result<MacWindow, AdapterError> {
+    pub fn open_window(&mut self) -> Result<MacWindow, AdapterError> {
         let mtm = MainThreadMarker::new().ok_or(AdapterError::Backend(
             "AppKit windows require the main thread",
         ))?;
@@ -260,11 +262,16 @@ impl MacHost {
         view.setLayer(Some(layer.as_super()));
         window.setContentView(Some(&view));
         window.makeKeyAndOrderFront(None);
+        // macOS has no scale-change event: the ABI's degradation is one Scale
+        // at window build, taken from this window's own backing factor.
+        let scale = dpi_scale_from_backing_factor(window.backingScaleFactor());
+        self.headless.push_event(InputEvent::Scale { scale });
         Ok(MacWindow {
             application,
             window,
             view,
             layer,
+            scale,
         })
     }
 }
@@ -310,9 +317,15 @@ pub struct MacWindow {
     window: Retained<NSWindow>,
     view: Retained<NSView>,
     layer: Retained<CAMetalLayer>,
+    /// The window's backing scale at build time, as queued on `Scale`.
+    scale: f32,
 }
 
 impl MacWindow {
+    /// The content scale this window was built with (its backing factor).
+    pub fn scale(&self) -> f32 {
+        self.scale
+    }
     /// Read all retained handles; dropping this value releases the live window.
     #[allow(dead_code)]
     pub fn keep_alive(&self) {

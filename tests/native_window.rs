@@ -215,3 +215,26 @@ fn decode_png(bytes: &[u8]) -> (u32, u32, Vec<u8>) {
     decoded.truncate(info.buffer_size());
     (info.width, info.height, decoded)
 }
+
+/// The scale check: a real window, its backing factor as the `Scale`
+/// channel's build-time value. A host without a GUI session reports SKIP.
+#[test]
+fn scale_verification_reports_a_real_backing_factor_or_skips() {
+    let output = Command::new(binary())
+        .arg("--verify-scale")
+        .output()
+        .expect("run opurom-platform --verify-scale");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "got {stdout}");
+    assert!(
+        stdout.starts_with("PASS scale=") || stdout.starts_with("SKIP"),
+        "got {stdout}"
+    );
+    assert!(!stdout.contains("FAIL"), "got {stdout}");
+    if let Some(scale) = stdout
+        .strip_prefix("PASS scale=")
+        .and_then(|value| value.trim().parse::<f32>().ok())
+    {
+        assert!(scale >= 1.0, "backing scale {scale} must be at least 1.0");
+    }
+}

@@ -139,7 +139,7 @@ renders a real frame. The mobile and handheld rows have no adapter and stay
 | `PlatformAdapter::graphics_backend` / `graphics_capabilities` | deterministic Software default; `Headless` and macOS `MacHost` report the capability row applied from the wire |
 | `PlatformViewRegistry` | deterministic native-view registry: shared 8-byte `OPV1` handle encoding, integer logical-pixel bounds, strict lifecycle and stable Z-order |
 | `frame_to_png(FrameView, path)` | real PNG output through a `CGImage` on macOS; documented `AppKitUnavailable` error elsewhere |
-| `open_window()` (macOS) | real `NSWindow`/`NSView`; draw, `cacheDisplay(in:to:)` capture, real PNG |
+| `open_window()` (macOS) | real `NSWindow`/`NSView`; draw, `cacheDisplay(in:to:)` capture, real PNG; queues one `Scale` at build from the window's `backingScaleFactor` |
 | `compare_rgba_to_ppm` | captured window pixels vs the software renderer PPM, with a documented tolerance |
 | `wayland_wire` | pure-Rust Wayland wire encoding: setup handshake, object IDs, opcode/size header, string arguments and the `wl_shm` stride/format contract; unit-tested on every host |
 | `WaylandHost::connect()` (Linux) | runtime `dlopen`/`dlsym` of `libwayland-client.so.0`; no link-time Wayland dependency; a missing runtime library is a documented `Wayland unavailable` error |

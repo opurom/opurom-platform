@@ -213,7 +213,7 @@ mod host {
             Err(verdict) => return verdict,
         };
 
-        let host = MacHost::new(width, height, &png);
+        let mut host = MacHost::new(width, height, &png);
         let window = match host.open_window() {
             Ok(window) => window,
             Err(error) => {

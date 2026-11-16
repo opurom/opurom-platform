@@ -177,7 +177,7 @@ fn run_window_capture(
 ) -> Result<Verification, String> {
     use opurom_platform::{capture_window, draw_and_capture, write_png, MacHost};
 
-    let host = MacHost::new(width, height, png_path);
+    let mut host = MacHost::new(width, height, png_path);
     let window = host.open_window().map_err(|error| error.to_string())?;
     // The frame under test is the software renderer's own output, so the
     // window shows exactly the pixels the comparison uses.
@@ -379,7 +379,7 @@ fn run_gpu_presentation(args: &[String]) -> GpuVerdict {
         }
     };
 
-    let host = MacHost::new(width, height, &png_path);
+    let mut host = MacHost::new(width, height, &png_path);
     let window = match host.open_window() {
         Ok(window) => window,
         Err(error) => {
@@ -438,6 +438,33 @@ fn verify_window(_args: &[String]) -> i32 {
     } else {
         println!("SKIP the native window verification is macOS only");
     }
+    0
+}
+
+/// Report the live window's content scale: a real AppKit window, its
+/// `backingScaleFactor` as the `Scale` channel's build-time value. Without a
+/// GUI session the check prints SKIP with the concrete reason and exits 0.
+#[cfg(target_os = "macos")]
+fn verify_scale() -> i32 {
+    use opurom_platform::MacHost;
+    let png = std::env::temp_dir().join("opurom-platform-scale-check.png");
+    let mut host = MacHost::new(320, 200, &png);
+    match host.open_window() {
+        Ok(window) => {
+            println!("PASS scale={}", window.scale());
+            0
+        }
+        Err(error) => {
+            println!("SKIP {error}");
+            0
+        }
+    }
+}
+
+/// The live scale check is macOS only; other hosts report SKIP.
+#[cfg(not(target_os = "macos"))]
+fn verify_scale() -> i32 {
+    println!("SKIP the live AppKit scale check is macOS only");
     0
 }
 
@@ -559,6 +586,9 @@ fn main() {
     }
     if args.iter().any(|arg| arg == "--verify-window") {
         std::process::exit(verify_window(&args));
+    }
+    if args.iter().any(|arg| arg == "--verify-scale") {
+        std::process::exit(verify_scale());
     }
     if args.iter().any(|arg| arg == "--desktop") {
         println!("capability | status");
