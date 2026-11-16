@@ -42,6 +42,31 @@ pub const WL_SHM_POOL_CREATE_BUFFER: u16 = 0;
 // `wl_output` events: geometry, mode, done, scale, then the v2 names.
 pub const WL_OUTPUT_DONE: u16 = 2;
 pub const WL_OUTPUT_SCALE: u16 = 3;
+// wl_compositor requests: create_surface, create_region.
+pub const WL_COMPOSITOR_CREATE_SURFACE: u16 = 0;
+// wl_surface requests: destroy, attach, damage, frame, set_opaque_region,
+// set_input_region, commit.
+pub const WL_SURFACE_ATTACH: u16 = 1;
+pub const WL_SURFACE_DAMAGE: u16 = 2;
+pub const WL_SURFACE_COMMIT: u16 = 6;
+// wl_buffer events: release.
+pub const WL_BUFFER_RELEASE: u16 = 0;
+// xdg_wm_base requests: destroy, create_positioner, get_xdg_surface, pong;
+// events: ping.
+pub const XDG_WM_BASE_GET_SURFACE: u16 = 2;
+pub const XDG_WM_BASE_PONG: u16 = 3;
+pub const XDG_WM_BASE_PING: u16 = 0;
+// xdg_surface requests: destroy, get_toplevel, get_popup,
+// set_window_geometry, ack_configure; events: configure.
+pub const XDG_SURFACE_GET_TOPLEVEL: u16 = 1;
+pub const XDG_SURFACE_ACK_CONFIGURE: u16 = 4;
+pub const XDG_SURFACE_CONFIGURE: u16 = 0;
+// xdg_toplevel requests: destroy, set_parent, set_title, set_app_id, ...;
+// events: configure, close, then the v4/v5 additions.
+pub const XDG_TOPLEVEL_SET_TITLE: u16 = 2;
+pub const XDG_TOPLEVEL_SET_APP_ID: u16 = 3;
+pub const XDG_TOPLEVEL_CONFIGURE: u16 = 0;
+pub const XDG_TOPLEVEL_CLOSE: u16 = 1;
 
 /// `wl_shm.format`: 32-bit native-endian A:R:G:B 8:8:8:8, four bytes per pixel.
 pub const WL_SHM_FORMAT_ARGB8888: u32 = 0;
@@ -247,6 +272,123 @@ pub fn encode_registry_bind(
     encode_message(registry_id, WL_REGISTRY_BIND, &body)
 }
 
+/// `wl_compositor.create_surface(new_id)`.
+pub fn encode_create_surface(compositor_id: u32, surface_id: u32) -> Result<Vec<u8>, AdapterError> {
+    encode_message(
+        compositor_id,
+        WL_COMPOSITOR_CREATE_SURFACE,
+        &surface_id.to_ne_bytes(),
+    )
+}
+
+/// `xdg_wm_base.get_xdg_surface(new_id, surface)`.
+pub fn encode_xdg_get_surface(
+    wm_base_id: u32,
+    xdg_surface_id: u32,
+    surface_id: u32,
+) -> Result<Vec<u8>, AdapterError> {
+    let mut body = Vec::with_capacity(8);
+    body.extend_from_slice(&xdg_surface_id.to_ne_bytes());
+    body.extend_from_slice(&surface_id.to_ne_bytes());
+    encode_message(wm_base_id, XDG_WM_BASE_GET_SURFACE, &body)
+}
+
+/// `xdg_surface.get_toplevel(new_id)`.
+pub fn encode_xdg_get_toplevel(
+    xdg_surface_id: u32,
+    toplevel_id: u32,
+) -> Result<Vec<u8>, AdapterError> {
+    encode_message(
+        xdg_surface_id,
+        XDG_SURFACE_GET_TOPLEVEL,
+        &toplevel_id.to_ne_bytes(),
+    )
+}
+
+/// `xdg_toplevel.set_title(string)` and `set_app_id(string)` carry one string.
+pub fn encode_toplevel_string(
+    toplevel_id: u32,
+    opcode: u16,
+    value: &str,
+) -> Result<Vec<u8>, AdapterError> {
+    encode_message(toplevel_id, opcode, &encode_string(value)?)
+}
+
+/// `xdg_surface.ack_configure(uint serial)`.
+pub fn encode_ack_configure(xdg_surface_id: u32, serial: u32) -> Result<Vec<u8>, AdapterError> {
+    encode_message(
+        xdg_surface_id,
+        XDG_SURFACE_ACK_CONFIGURE,
+        &serial.to_ne_bytes(),
+    )
+}
+
+/// `wl_surface.attach(buffer, 0, 0)` — 0.1.0 always attaches at the origin.
+pub fn encode_surface_attach(surface_id: u32, buffer_id: u32) -> Result<Vec<u8>, AdapterError> {
+    let mut body = Vec::with_capacity(12);
+    body.extend_from_slice(&buffer_id.to_ne_bytes());
+    body.extend_from_slice(&0i32.to_ne_bytes());
+    body.extend_from_slice(&0i32.to_ne_bytes());
+    encode_message(surface_id, WL_SURFACE_ATTACH, &body)
+}
+
+/// `wl_surface.damage(0, 0, width, height)` — the full buffer, in bytes.
+pub fn encode_surface_damage(
+    surface_id: u32,
+    width: i32,
+    height: i32,
+) -> Result<Vec<u8>, AdapterError> {
+    let mut body = Vec::with_capacity(16);
+    body.extend_from_slice(&0i32.to_ne_bytes());
+    body.extend_from_slice(&0i32.to_ne_bytes());
+    body.extend_from_slice(&width.to_ne_bytes());
+    body.extend_from_slice(&height.to_ne_bytes());
+    encode_message(surface_id, WL_SURFACE_DAMAGE, &body)
+}
+
+/// `wl_surface.commit()`.
+pub fn encode_surface_commit(surface_id: u32) -> Result<Vec<u8>, AdapterError> {
+    encode_message(surface_id, WL_SURFACE_COMMIT, &[])
+}
+
+/// `xdg_wm_base.pong(uint serial)` — the mandatory answer to a ping.
+pub fn encode_pong(wm_base_id: u32, serial: u32) -> Result<Vec<u8>, AdapterError> {
+    encode_message(wm_base_id, XDG_WM_BASE_PONG, &serial.to_ne_bytes())
+}
+
+/// `xdg_surface.configure(uint serial)`.
+pub fn decode_xdg_configure_serial(body: &[u8]) -> Result<u32, AdapterError> {
+    if body.len() != 4 {
+        return Err(AdapterError::Backend(BAD_XDG_BODY));
+    }
+    Ok(u32::from_ne_bytes([body[0], body[1], body[2], body[3]]))
+}
+
+/// `xdg_toplevel.configure(int width, int height, array states)`: a zero
+/// width or height means the client decides its own dimension. The states
+/// array is validated and otherwise ignored — no state changes the ABI yet.
+pub fn decode_toplevel_configure(body: &[u8]) -> Result<(i32, i32), AdapterError> {
+    if body.len() < 12 {
+        return Err(AdapterError::Backend(BAD_XDG_BODY));
+    }
+    let width = i32::from_ne_bytes([body[0], body[1], body[2], body[3]]);
+    let height = i32::from_ne_bytes([body[4], body[5], body[6], body[7]]);
+    let states_len = u32::from_ne_bytes([body[8], body[9], body[10], body[11]]) as usize;
+    let padded = word_align(states_len)?;
+    if body.len() != 12 + padded {
+        return Err(AdapterError::Backend(BAD_XDG_BODY));
+    }
+    Ok((width, height))
+}
+
+/// `xdg_toplevel.close` and `wl_buffer.release` carry no arguments.
+pub fn decode_empty_event(body: &[u8]) -> Result<(), AdapterError> {
+    if !body.is_empty() {
+        return Err(AdapterError::Backend(BAD_XDG_BODY));
+    }
+    Ok(())
+}
+
 /// Both 32-bit wl_shm formats use four bytes per pixel; other fourcc values are
 /// not part of this adapter's buffer contract.
 pub fn shm_bytes_per_pixel(format: u32) -> Option<u32> {
@@ -279,8 +421,16 @@ pub fn shm_pool_size(offset: i32, stride: i32, height: i32) -> Result<i32, Adapt
 
 /// `wl_shm.create_pool(new_id pool, fd, int size)`. The fd travels in
 /// `SCM_RIGHTS` ancillary data and therefore takes no bytes in the message.
-pub fn encode_create_pool(shm_id: u32, pool_id: u32, size: i32) -> Result<Vec<u8>, AdapterError> {
+pub fn encode_create_pool(
+    shm_id: u32,
+    pool_id: u32,
+    fd: i32,
+    size: i32,
+) -> Result<Vec<u8>, AdapterError> {
     let mut body = pool_id.to_ne_bytes().to_vec();
+    // The fd word is the number in the client's table; the real handle rides
+    // the SCM_RIGHTS ancillary data of the same send.
+    body.extend_from_slice(&fd.to_ne_bytes());
     body.extend_from_slice(&size.to_ne_bytes());
     encode_message(shm_id, WL_SHM_CREATE_POOL, &body)
 }
@@ -387,6 +537,7 @@ const BAD_TRAILING: &str = "Wayland event batch ends with a partial message";
 const BAD_GEOMETRY: &str = "Wayland display geometry event is invalid";
 const BAD_LAYOUT_PATCH: &str = "Wayland layout patch event is invalid";
 const BAD_GRAPHICS_BACKEND: &str = "graphics backend capability event is invalid";
+const BAD_XDG_BODY: &str = "the xdg-shell event body does not match its opcode";
 
 impl WireEvent {
     /// Two-word input/resize messages need no padding; geometry and its layout
@@ -853,6 +1004,76 @@ pub fn decode_batch(bytes: &[u8], limit: usize) -> Result<Vec<WireEvent>, Adapte
     }
 }
 
+/// One SCM_RIGHTS message: the descriptor sits immediately after its header.
+#[cfg(unix)]
+#[repr(C)]
+struct FdCmsg {
+    header: libc::cmsghdr,
+    fd: i32,
+}
+
+#[cfg(unix)]
+fn fd_control_space() -> usize {
+    let align = std::mem::size_of::<usize>();
+    let raw = std::mem::size_of::<libc::cmsghdr>() + std::mem::size_of::<i32>();
+    (raw + align - 1) & !(align - 1)
+}
+
+/// Send `bytes` on a Unix socket and pass `fd` in the same message's
+/// SCM_RIGHTS ancillary data. Used for `wl_shm.create_pool`'s fd and, later,
+/// `wl_keyboard.keymap`; without this the compositor receives a meaningless
+/// number and the mapping is leaked.
+#[cfg(unix)]
+pub fn send_with_fd(socket: i32, bytes: &[u8], fd: i32) -> Result<(), AdapterError> {
+    const BAD_FD_SEND: &str = "the file descriptor could not be sent";
+    let iov = libc::iovec {
+        iov_base: bytes.as_ptr() as *mut libc::c_void,
+        iov_len: bytes.len(),
+    };
+    let mut control: FdCmsg = unsafe { std::mem::zeroed() };
+    control.header.cmsg_len =
+        (std::mem::size_of::<libc::cmsghdr>() + std::mem::size_of::<i32>()) as _;
+    control.header.cmsg_level = libc::SOL_SOCKET;
+    control.header.cmsg_type = libc::SCM_RIGHTS;
+    control.fd = fd;
+    let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+    message.msg_iov = &iov as *const libc::iovec as *mut libc::iovec;
+    message.msg_iovlen = 1;
+    message.msg_control = (&mut control as *mut FdCmsg).cast();
+    message.msg_controllen = fd_control_space() as _;
+    let sent = unsafe { libc::sendmsg(socket, &message, libc::MSG_NOSIGNAL) };
+    if sent == bytes.len() as isize {
+        Ok(())
+    } else {
+        Err(AdapterError::Backend(BAD_FD_SEND))
+    }
+}
+
+/// Receive one SCM_RIGHTS descriptor alongside a message and hand back the
+/// owned fd (the caller closes it exactly once).
+#[cfg(unix)]
+pub fn recv_with_fd(socket: i32, bytes: &mut [u8]) -> Result<(usize, i32), AdapterError> {
+    const BAD_FD_RECV: &str = "the file descriptor could not be received";
+    let mut iov = libc::iovec {
+        iov_base: bytes.as_mut_ptr().cast::<libc::c_void>(),
+        iov_len: bytes.len(),
+    };
+    let mut control: FdCmsg = unsafe { std::mem::zeroed() };
+    let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+    message.msg_iov = &mut iov;
+    message.msg_iovlen = 1;
+    message.msg_control = (&mut control as *mut FdCmsg).cast();
+    message.msg_controllen = fd_control_space() as _;
+    let read = unsafe { libc::recvmsg(socket, &mut message, 0) };
+    if read <= 0
+        || control.header.cmsg_level != libc::SOL_SOCKET
+        || control.header.cmsg_type != libc::SCM_RIGHTS
+    {
+        return Err(AdapterError::Backend(BAD_FD_RECV));
+    }
+    Ok((read as usize, control.fd))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -863,6 +1084,79 @@ mod tests {
         assert_eq!(decode_output_scale(&2u32.to_ne_bytes()).unwrap(), 2);
         assert!(decode_output_scale(&[1, 2, 3]).is_err());
         assert!(decode_output_scale(&[0u8; 8]).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scm_rights_carries_a_real_descriptor_with_the_message() {
+        use std::os::fd::AsRawFd;
+        let mut pair = [0i32; 2];
+        assert_eq!(
+            unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, pair.as_mut_ptr()) },
+            0
+        );
+        let file = std::fs::File::open("/dev/null").expect("open /dev/null");
+        let message = b"fd-trip";
+        send_with_fd(pair[0], message, file.as_raw_fd()).expect("send fd");
+        let mut buffer = [0u8; 16];
+        let (used, passed) = recv_with_fd(pair[1], &mut buffer).expect("recv fd");
+        assert_eq!(&buffer[..used], message);
+        assert!(passed >= 0, "SCM_RIGHTS must name a live descriptor");
+        unsafe {
+            libc::close(passed);
+            libc::close(pair[0]);
+            libc::close(pair[1]);
+        }
+    }
+
+    #[test]
+    fn xdg_requests_and_configures_match_the_wire() {
+        let surface = encode_create_surface(2, 3).unwrap();
+        let parsed = decode_header(&surface).unwrap();
+        assert_eq!(
+            (parsed.object_id, parsed.opcode),
+            (2, WL_COMPOSITOR_CREATE_SURFACE)
+        );
+        assert_eq!(&surface[8..], 3u32.to_ne_bytes());
+
+        let xdg = encode_xdg_get_surface(4, 5, 3).unwrap();
+        assert_eq!(&xdg[8..], [5u32.to_ne_bytes(), 3u32.to_ne_bytes()].concat());
+        let top = encode_xdg_get_toplevel(5, 6).unwrap();
+        assert_eq!(&top[8..], 6u32.to_ne_bytes());
+        let title = encode_toplevel_string(6, XDG_TOPLEVEL_SET_TITLE, "opurom").unwrap();
+        let (text, _) = decode_string(&title[8..]).unwrap();
+        assert_eq!(text, "opurom");
+        let ack = encode_ack_configure(5, 91).unwrap();
+        assert_eq!(&ack[8..], 91u32.to_ne_bytes());
+
+        let attach = encode_surface_attach(3, 7).unwrap();
+        assert_eq!(attach.len(), 20);
+        assert_eq!(&attach[8..12], 7u32.to_ne_bytes());
+        let damage = encode_surface_damage(3, 4, 2).unwrap();
+        assert_eq!(damage.len(), 24);
+        assert_eq!(&damage[16..20], 4i32.to_ne_bytes());
+        assert_eq!(&damage[20..24], 2i32.to_ne_bytes());
+        assert_eq!(
+            decode_header(&encode_surface_commit(3).unwrap())
+                .unwrap()
+                .opcode,
+            WL_SURFACE_COMMIT
+        );
+    }
+
+    #[test]
+    fn xdg_configure_bodies_decode_without_guessing() {
+        assert_eq!(decode_xdg_configure_serial(&7u32.to_ne_bytes()).unwrap(), 7);
+        assert!(decode_xdg_configure_serial(&[]).is_err());
+        let mut body = Vec::new();
+        body.extend_from_slice(&320i32.to_ne_bytes());
+        body.extend_from_slice(&200i32.to_ne_bytes());
+        body.extend_from_slice(&0u32.to_ne_bytes()); // no states
+        assert_eq!(decode_toplevel_configure(&body).unwrap(), (320, 200));
+        body.extend_from_slice(&[4]); // trailing padding breaks the length
+        assert!(decode_toplevel_configure(&body).is_err());
+        assert!(decode_empty_event(&[0u8; 4]).is_err());
+        assert_eq!(decode_empty_event(&[]), Ok(()));
     }
 
     /// Concrete wire bytes on both host byte orders. Wayland integers are
@@ -985,13 +1279,19 @@ mod tests {
 
     #[test]
     fn shm_pool_and_buffer_messages_match_the_wire_bytes() {
-        // wl_shm@3.create_pool(wl_shm_pool@4, fd, size=24): size=16. The fd is
-        // passed through SCM_RIGHTS, so it consumes no bytes.
+        // wl_shm@3.create_pool(wl_shm_pool@4, fd=8, size=24): size=20. The
+        // descriptor also travels as SCM_RIGHTS ancillary data.
         assert_eq!(
-            encode_create_pool(3, 4, 24).unwrap(),
+            encode_create_pool(3, 4, 8, 24).unwrap(),
             native(
-                &[0x03, 0, 0, 0, 0x00, 0x00, 0x10, 0x00, 0x04, 0, 0, 0, 0x18, 0, 0, 0,],
-                &[0, 0, 0, 0x03, 0x00, 0x10, 0x00, 0x00, 0, 0, 0, 0x04, 0, 0, 0, 0x18,],
+                &[
+                    0x03, 0, 0, 0, 0x00, 0x00, 0x14, 0x00, 0x04, 0, 0, 0, 0x08, 0, 0, 0, 0x18, 0,
+                    0, 0,
+                ],
+                &[
+                    0, 0, 0, 0x03, 0x00, 0x14, 0x00, 0x00, 0, 0, 0, 0x04, 0, 0, 0, 0x08, 0, 0, 0,
+                    0x18,
+                ],
             ),
         );
         // wl_shm_pool@4.create_buffer(wl_buffer@5, offset=0, 2x3, stride=8,
@@ -1123,7 +1423,7 @@ mod tests {
             second.to_vec(),
             encode_registry_bind(2, 7, "wl_shm", 1, 4).unwrap(),
             encode_registry_bind(2, 9, "wl_output", 4, 6).unwrap(),
-            encode_create_pool(3, 4, 24).unwrap(),
+            encode_create_pool(3, 4, 8, 24).unwrap(),
             encode_create_buffer(4, 5, 0, 2, 3, 8, WL_SHM_FORMAT_ARGB8888).unwrap(),
             encode_graphics_backend_event(GraphicsBackendCapabilities::software_default()).unwrap(),
         ];

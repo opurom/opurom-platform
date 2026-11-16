@@ -17,11 +17,17 @@ use std::time::{Duration, Instant};
 use crate::ime::{self, ImeStatus, TextComposer};
 use crate::input_map::wire_input;
 use crate::wayland_wire::{
-    decode_event, decode_output_scale, decode_string, encode_registry_bind, next_event,
-    setup_handshake, ObjectIds, DISPLAY_ID, EVENT_OBJECT_ID, WL_CALLBACK_DONE,
-    WL_DISPLAY_ERROR_EVENT, WL_OUTPUT_DONE, WL_OUTPUT_SCALE, WL_REGISTRY_GLOBAL,
+    decode_empty_event, decode_event, decode_output_scale, decode_string,
+    decode_toplevel_configure, decode_xdg_configure_serial, encode_ack_configure,
+    encode_create_buffer, encode_create_pool, encode_create_surface, encode_pong,
+    encode_registry_bind, encode_surface_attach, encode_surface_commit, encode_surface_damage,
+    encode_toplevel_string, encode_xdg_get_surface, encode_xdg_get_toplevel, next_event,
+    send_with_fd, setup_handshake, ObjectIds, DISPLAY_ID, EVENT_OBJECT_ID, WL_BUFFER_RELEASE,
+    WL_CALLBACK_DONE, WL_DISPLAY_ERROR_EVENT, WL_OUTPUT_DONE, WL_OUTPUT_SCALE, WL_REGISTRY_GLOBAL,
+    WL_SHM_FORMAT_ARGB8888, XDG_SURFACE_CONFIGURE, XDG_TOPLEVEL_CLOSE, XDG_TOPLEVEL_CONFIGURE,
+    XDG_TOPLEVEL_SET_APP_ID, XDG_TOPLEVEL_SET_TITLE, XDG_WM_BASE_PING,
 };
-use crate::{AdapterError, InputEvent, WAYLAND_DISPLAY_ENV};
+use crate::{AdapterError, FrameView, InputEvent, Lifecycle, Size, WAYLAND_DISPLAY_ENV};
 
 type WlDisplayConnectFn = unsafe extern "C" fn(*const c_char) -> *mut c_void;
 type WlDisplayDisconnectFn = unsafe extern "C" fn(*mut c_void);
@@ -46,8 +52,18 @@ const WAYLAND_TIMEOUT: &str = "the Wayland compositor did not answer the handsha
 const WAYLAND_DISPLAY_ERROR: &str = "the Wayland compositor reported a wl_display error";
 const WAYLAND_HANDSHAKE_ERROR: &str = "the Wayland handshake did not complete";
 const WAYLAND_INPUT_ERROR: &str = "the Wayland event frame did not decode";
+const WAYLAND_NO_SURFACE: &str = "the compositor does not announce wl_compositor";
+const WAYLAND_NO_SHM: &str = "the compositor does not announce wl_shm";
+const WAYLAND_NO_SHELL: &str = "the compositor does not announce xdg_wm_base";
+const WAYLAND_NO_WINDOW: &str = "no window is open on this connection";
+const WAYLAND_WINDOW_OPEN: &str = "a window is already open on this connection";
+const WAYLAND_CONFIGURE_TIMEOUT: &str = "the compositor did not configure the window";
+const WAYLAND_BUFFER_TIMEOUT: &str = "the compositor did not release a shm buffer";
+const WAYLAND_SHM_FAILED: &str = "the shared memory pool could not be created";
 /// The handshake waits at most this long for the compositor's reply.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
+/// The configure/pool round trips wait at most this long for the compositor.
+const WINDOW_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[repr(C)]
 struct PollFd {
@@ -134,6 +150,23 @@ unsafe fn symbol<T>(handle: *mut c_void, name: &[u8]) -> Result<T, AdapterError>
     Ok(std::mem::transmute_copy::<*mut c_void, T>(&pointer))
 }
 
+/// The single live window's protocol objects and its double-buffered shm
+/// pool. `released` tracks whether a buffer may be reused; the compositor
+/// owns a buffer from `wl_surface.commit` until `wl_buffer.release`.
+struct WaylandWindow {
+    surface_id: u32,
+    xdg_surface_id: u32,
+    toplevel_id: u32,
+    pool_id: u32,
+    buffer_ids: [u32; 2],
+    released: [bool; 2],
+    fd: i32,
+    map: *mut u8,
+    map_len: usize,
+    stride: usize,
+    size: Size,
+}
+
 /// What the compositor answered during the setup handshake.
 #[derive(Clone, Debug, Default)]
 pub struct Handshake {
@@ -173,6 +206,31 @@ pub struct WaylandHost {
     scale_applied: Option<f32>,
     /// A scale event awaiting its `done` frame.
     scale_pending: Option<f32>,
+    /// `(name, version)` of the first announced `wl_compositor`, if any.
+    compositor_global: Option<(u32, u32)>,
+    /// `(name, version)` of the first announced `wl_shm`, if any.
+    shm_global: Option<(u32, u32)>,
+    /// `(name, version)` of the first announced `xdg_wm_base`, if any.
+    wm_base_global: Option<(u32, u32)>,
+    /// Bound object ids: 0 until the window chain is created.
+    server_ids: ServerIds,
+    /// The last configure serial awaiting `ack_configure`, and the size the
+    /// compositor configured (zero means "client decides").
+    configure_serial: Option<u32>,
+    configure_size: Option<Size>,
+    window: Option<WaylandWindow>,
+}
+
+/// Bound ids of the window's protocol chain, shared by the event pump and
+/// `open_window`; their object ids are known before the window is mapped.
+#[derive(Clone, Copy, Default)]
+struct ServerIds {
+    compositor: u32,
+    shm: u32,
+    wm_base: u32,
+    surface: u32,
+    xdg_surface: u32,
+    toplevel: u32,
 }
 
 impl WaylandHost {
@@ -213,6 +271,13 @@ impl WaylandHost {
             output_id: 0,
             scale_applied: None,
             scale_pending: None,
+            compositor_global: None,
+            shm_global: None,
+            wm_base_global: None,
+            server_ids: ServerIds::default(),
+            configure_serial: None,
+            configure_size: None,
+            window: None,
         })
     }
 
@@ -259,6 +324,15 @@ impl WaylandHost {
                         }
                         "wl_output" if self.output_global.is_none() => {
                             self.output_global = Some((name, version));
+                        }
+                        "wl_compositor" if self.compositor_global.is_none() => {
+                            self.compositor_global = Some((name, version));
+                        }
+                        "wl_shm" if self.shm_global.is_none() => {
+                            self.shm_global = Some((name, version));
+                        }
+                        "xdg_wm_base" if self.wm_base_global.is_none() => {
+                            self.wm_base_global = Some((name, version));
                         }
                         _ => {}
                     }
@@ -330,6 +404,59 @@ impl WaylandHost {
                     // geometry/mode and the v2 name/description frames carry
                     // nothing the ABI's scale channel needs.
                     _ => {}
+                }
+            } else if header.object_id == self.server_ids.xdg_surface
+                && self.server_ids.xdg_surface != 0
+            {
+                if header.opcode == XDG_SURFACE_CONFIGURE {
+                    self.configure_serial = Some(decode_xdg_configure_serial(body)?);
+                }
+            } else if header.object_id == self.server_ids.toplevel && self.server_ids.toplevel != 0
+            {
+                match header.opcode {
+                    XDG_TOPLEVEL_CONFIGURE => {
+                        let (width, height) = decode_toplevel_configure(body)?;
+                        // Zero or negative means the client decides; the
+                        // requested size stands until a real size arrives.
+                        if width > 0 && height > 0 {
+                            self.configure_size = Some(Size {
+                                width: width as u32,
+                                height: height as u32,
+                            });
+                        }
+                    }
+                    XDG_TOPLEVEL_CLOSE => {
+                        self.events
+                            .push_back(InputEvent::Lifecycle(Lifecycle::Destroyed));
+                        queued += 1;
+                    }
+                    _ => {}
+                }
+            } else if header.object_id == self.server_ids.wm_base
+                && self.server_ids.wm_base != 0
+                && header.opcode == XDG_WM_BASE_PING
+            {
+                // A ping carries the same one-word serial shape as an
+                // xdg_surface.configure; the compositor may disconnect an
+                // unresponsive client, so always answer it.
+                let serial = decode_xdg_configure_serial(body)?;
+                self.write_all(&encode_pong(self.server_ids.wm_base, serial)?)?;
+            } else if self
+                .window
+                .as_ref()
+                .is_some_and(|window| window.buffer_ids.contains(&header.object_id))
+            {
+                if header.opcode == WL_BUFFER_RELEASE {
+                    decode_empty_event(body)?;
+                    if let Some(window) = self.window.as_mut() {
+                        if let Some(index) = window
+                            .buffer_ids
+                            .iter()
+                            .position(|id| *id == header.object_id)
+                        {
+                            window.released[index] = true;
+                        }
+                    }
                 }
             } else if header.object_id == EVENT_OBJECT_ID {
                 let (frame, _) = decode_event(&self.buffer[offset..])?
@@ -483,8 +610,291 @@ impl WaylandHost {
     }
 }
 
+/// Map an anonymous shm pool: the file is passed by fd, never by path, so
+/// no filesystem state and no C toolchain enter the picture.
+fn anonymous_pool(len: usize) -> Result<(i32, *mut u8), AdapterError> {
+    unsafe {
+        let fd = libc::memfd_create(b"opurom-shm\0".as_ptr().cast::<c_char>(), 0);
+        if fd < 0 {
+            return Err(AdapterError::Backend(WAYLAND_SHM_FAILED));
+        }
+        if libc::ftruncate(fd, len as i64) != 0 {
+            libc::close(fd);
+            return Err(AdapterError::Backend(WAYLAND_SHM_FAILED));
+        }
+        let address = libc::mmap(
+            std::ptr::null_mut(),
+            len,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            fd,
+            0,
+        );
+        if address == libc::MAP_FAILED {
+            libc::close(fd);
+            return Err(AdapterError::Backend(WAYLAND_SHM_FAILED));
+        }
+        Ok((fd, address.cast::<u8>()))
+    }
+}
+
+impl WaylandHost {
+    /// Open a real xdg-shell window. The compositor must announce
+    /// `wl_compositor`, `wl_shm` and `xdg_wm_base`; without one of them the
+    /// host reports a typed reason instead of inventing a surface.
+    ///
+    /// shortcut: the initial commit carries no buffer, as xdg-shell requires;
+    /// only after `configure` is acknowledged may a buffer be attached.
+    /// There is no continuous `wl_surface.frame` repaint pace yet — the host
+    /// presents on demand, and no server-side decorations are drawn.
+    pub fn open_window(&mut self, size: Size, title: &str) -> Result<(), AdapterError> {
+        if self.window.is_some() {
+            return Err(AdapterError::Backend(WAYLAND_WINDOW_OPEN));
+        }
+        let (comp_name, comp_version) = self
+            .compositor_global
+            .ok_or(AdapterError::Backend(WAYLAND_NO_SURFACE))?;
+        let (shm_name, shm_version) = self
+            .shm_global
+            .ok_or(AdapterError::Backend(WAYLAND_NO_SHM))?;
+        let (shell_name, shell_version) = self
+            .wm_base_global
+            .ok_or(AdapterError::Backend(WAYLAND_NO_SHELL))?;
+        checked_window_size(size)?;
+        let mut ids = ServerIds::default();
+        ids.compositor = self.ids.allocate()?;
+        ids.shm = self.ids.allocate()?;
+        ids.wm_base = self.ids.allocate()?;
+        ids.surface = self.ids.allocate()?;
+        ids.xdg_surface = self.ids.allocate()?;
+        ids.toplevel = self.ids.allocate()?;
+        let mut bytes = Vec::new();
+        bytes.extend(encode_registry_bind(
+            self.registry_id,
+            comp_name,
+            "wl_compositor",
+            comp_version,
+            ids.compositor,
+        )?);
+        bytes.extend(encode_registry_bind(
+            self.registry_id,
+            shm_name,
+            "wl_shm",
+            shm_version,
+            ids.shm,
+        )?);
+        bytes.extend(encode_registry_bind(
+            self.registry_id,
+            shell_name,
+            "xdg_wm_base",
+            shell_version,
+            ids.wm_base,
+        )?);
+        self.server_ids = ids;
+        self.write_all(&bytes)?;
+
+        let pool_id = self.ids.allocate()?;
+        let buffer_ids = [self.ids.allocate()?, self.ids.allocate()?];
+        self.configure_serial = None;
+        self.configure_size = None;
+        let mut setup = encode_create_surface(ids.compositor, ids.surface)?;
+        setup.extend(encode_xdg_get_surface(
+            ids.wm_base,
+            ids.xdg_surface,
+            ids.surface,
+        )?);
+        setup.extend(encode_xdg_get_toplevel(ids.xdg_surface, ids.toplevel)?);
+        setup.extend(encode_toplevel_string(
+            ids.toplevel,
+            XDG_TOPLEVEL_SET_TITLE,
+            title,
+        )?);
+        setup.extend(encode_toplevel_string(
+            ids.toplevel,
+            XDG_TOPLEVEL_SET_APP_ID,
+            "opurom",
+        )?);
+        // The initial commit must carry no buffer: it makes the compositor
+        // send the configure sequence we wait for below.
+        setup.extend(encode_surface_commit(ids.surface)?);
+        self.write_all(&setup)?;
+
+        let deadline = Instant::now() + WINDOW_TIMEOUT;
+        while self.configure_serial.is_none() {
+            if Instant::now() >= deadline {
+                return Err(AdapterError::Backend(WAYLAND_CONFIGURE_TIMEOUT));
+            }
+            self.pump_input()?;
+        }
+        let serial = self.configure_serial.take().expect("checked above");
+        self.write_all(&encode_ack_configure(ids.xdg_surface, serial)?)?;
+        let size = self.configure_size.unwrap_or(size);
+        checked_window_size(size)?;
+        let stride = (size.width as usize)
+            .checked_mul(4)
+            .filter(|stride| *stride <= i32::MAX as usize)
+            .ok_or(AdapterError::InvalidFrame)?;
+        let half = stride
+            .checked_mul(size.height as usize)
+            .ok_or(AdapterError::InvalidFrame)?;
+        let map_len = half
+            .checked_mul(2)
+            .filter(|len| *len <= i32::MAX as usize)
+            .ok_or(AdapterError::InvalidFrame)?;
+        let (pool_fd, map) = anonymous_pool(map_len)?;
+        let pool_bytes = encode_create_pool(ids.shm, pool_id, self.fd, map_len as i32)?;
+        // The pool's fd is meaningless without SCM_RIGHTS: the real handle
+        // must travel in the same send as the request.
+        send_with_fd(self.fd, &pool_bytes, pool_fd)?;
+        let mut buffers = Vec::new();
+        buffers.extend(encode_create_buffer(
+            pool_id,
+            buffer_ids[0],
+            0,
+            size.width as i32,
+            size.height as i32,
+            stride as i32,
+            WL_SHM_FORMAT_ARGB8888,
+        )?);
+        buffers.extend(encode_create_buffer(
+            pool_id,
+            buffer_ids[1],
+            half as i32,
+            size.width as i32,
+            size.height as i32,
+            stride as i32,
+            WL_SHM_FORMAT_ARGB8888,
+        )?);
+        self.write_all(&buffers)?;
+        self.window = Some(WaylandWindow {
+            surface_id: ids.surface,
+            xdg_surface_id: ids.xdg_surface,
+            toplevel_id: ids.toplevel,
+            pool_id,
+            buffer_ids,
+            released: [true, true],
+            fd: pool_fd,
+            map,
+            map_len,
+            stride,
+            size,
+        });
+        self.events.push_back(InputEvent::Resize { size });
+        Ok(())
+    }
+
+    /// The configured size of the open window, if any.
+    pub fn window_size(&self) -> Option<Size> {
+        self.window.as_ref().map(|window| window.size)
+    }
+
+    /// Copy one ABGR/RGBA frame into a released shm buffer and commit it.
+    /// A frame that does not match the configured size is rejected before
+    /// any bytes are copied.
+    pub fn present(&mut self, frame: FrameView<'_>) -> Result<(), AdapterError> {
+        let size = self
+            .window
+            .as_ref()
+            .ok_or(AdapterError::Backend(WAYLAND_NO_WINDOW))?
+            .size;
+        checked_window_size(size)?;
+        if frame.width != size.width || frame.height != size.height {
+            return Err(AdapterError::InvalidFrame);
+        }
+        let deadline = Instant::now() + WINDOW_TIMEOUT;
+        let index = loop {
+            if let Some(window) = &self.window {
+                if let Some(index) = window.released.iter().position(|released| *released) {
+                    break index;
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(AdapterError::Backend(WAYLAND_BUFFER_TIMEOUT));
+            }
+            self.pump_input()?;
+        };
+        let window = self
+            .window
+            .as_mut()
+            .ok_or(AdapterError::Backend(WAYLAND_NO_WINDOW))?;
+        let half = window.map_len / 2;
+        let offset = index * half;
+        let bytes = frame.width as usize * 4;
+        for row in 0..frame.height as usize {
+            let from = row * bytes;
+            let to = offset + row * window.stride;
+            if to + bytes > window.map_len {
+                return Err(AdapterError::InvalidFrame);
+            }
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    frame.pixels.as_ptr().add(from),
+                    window.map.add(to),
+                    bytes,
+                );
+            }
+        }
+        window.released[index] = false;
+        let buffer_id = window.buffer_ids[index];
+        let surface_id = window.surface_id;
+        let mut bytes = encode_surface_attach(surface_id, buffer_id)?;
+        bytes.extend(encode_surface_damage(
+            surface_id,
+            size.width as i32,
+            size.height as i32,
+        )?);
+        bytes.extend(encode_surface_commit(surface_id)?);
+        self.write_all(&bytes)
+    }
+
+    fn teardown_window(&mut self) {
+        let Some(window) = self.window.take() else {
+            return;
+        };
+        let mut destroy = Vec::new();
+        for id in window.buffer_ids {
+            destroy.push(crate::wayland_wire::encode_message(id, 0, &[]));
+        }
+        destroy.push(crate::wayland_wire::encode_message(window.pool_id, 0, &[]));
+        destroy.push(crate::wayland_wire::encode_message(
+            window.toplevel_id,
+            0,
+            &[],
+        ));
+        destroy.push(crate::wayland_wire::encode_message(
+            window.xdg_surface_id,
+            0,
+            &[],
+        ));
+        destroy.push(crate::wayland_wire::encode_message(
+            window.surface_id,
+            0,
+            &[],
+        ));
+        for message in destroy.into_iter().flatten() {
+            let _ = self.write_all(&message);
+        }
+        unsafe {
+            libc::munmap(window.map.cast::<c_void>(), window.map_len);
+            libc::close(window.fd);
+        }
+    }
+}
+
+fn checked_window_size(size: Size) -> Result<(), AdapterError> {
+    if size.width == 0
+        || size.height == 0
+        || size.width > i32::MAX as u32
+        || size.height > i32::MAX as u32
+    {
+        return Err(AdapterError::InvalidFrame);
+    }
+    Ok(())
+}
+
 impl Drop for WaylandHost {
     fn drop(&mut self) {
+        self.teardown_window();
         if !self.display.is_null() {
             // SAFETY: the display came from wl_display_connect and is closed once.
             unsafe { (self.lib.disconnect)(self.display) };

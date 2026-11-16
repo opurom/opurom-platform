@@ -10,6 +10,9 @@ sha2 = "0.10.9"
 aes-gcm = "0.10.3"
 getrandom = "0.2.15"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "=0.52.0", features = [
     "Win32_Foundation",

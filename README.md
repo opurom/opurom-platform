@@ -141,7 +141,7 @@ renders a real frame. The mobile and handheld rows have no adapter and stay
 | `frame_to_png(FrameView, path)` | real PNG output through a `CGImage` on macOS; documented `AppKitUnavailable` error elsewhere |
 | `open_window()` (macOS) | real `NSWindow`/`NSView`; draw, `cacheDisplay(in:to:)` capture, real PNG; queues one `Scale` at build from the window's `backingScaleFactor` |
 | `compare_rgba_to_ppm` | captured window pixels vs the software renderer PPM, with a documented tolerance |
-| `wayland_wire` | pure-Rust Wayland wire encoding: setup handshake, object IDs, opcode/size header, string arguments and the `wl_shm` stride/format contract; unit-tested on every host |
+| `wayland_wire` | pure-Rust Wayland wire encoding: setup handshake, object IDs, opcode/size header, string arguments, the `wl_shm` stride/format contract, xdg-shell surface requests/configures, and SCM_RIGHTS fd passing; unit-tested on every host |
 | `WaylandHost::connect()` (Linux) | runtime `dlopen`/`dlsym` of `libwayland-client.so.0`; no link-time Wayland dependency; a missing runtime library is a documented `Wayland unavailable` error |
 | `tray::TrayHost` | platform-neutral tray menu contract (title, items, `quit_id`), FIFO `ItemClicked`/`QuitRequested` events; `HeadlessTray` reference + real macOS `NSStatusItem` and Windows `Shell_NotifyIconW` adapters; other targets return a typed `Unavailable` reason |
 | `global_hotkey::HotkeyHost` | register/trigger/unregister contract with a named `Modifiers`+`Key` chord model and `parse_chord`; `HeadlessHotkey` reference + real macOS Carbon `RegisterEventHotKey` and Windows `RegisterHotKey` adapters |
@@ -658,7 +658,13 @@ three times before the headless fallback takes over.
   committed text starts once a focused surface exists. `scale()` binds the
   first announced `wl_output`, maps its `scale` event (applied at `done`) to
   the `Scale` channel, and degrades to one `Scale{1.0}` when the output
-  carries no scale. A missing
+  carries no scale. `open_window(size, title)` binds `wl_compositor`/`wl_shm`/
+  `xdg_wm_base`, makes the empty initial commit xdg-shell requires, waits for
+  `configure`, acks it, then maps a double-buffered memfd pool (its fd passed
+  with SCM_RIGHTS); `present(frame)` copies into a released `wl_buffer` and
+  commits, and `wl_buffer.release` marks it reusable. xdg pings are answered
+  with pong. `shortcut`: no `wl_surface.frame` repaint pace and no
+  server-side decorations yet. A missing
   `libwayland-client.so.0` returns
   `Wayland unavailable: dlopen(...) failed`; a missing symbol returns
   `Wayland unavailable: libwayland-client is missing a required symbol`.
