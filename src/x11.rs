@@ -8,7 +8,7 @@
 //! 24/32-bit TrueColor visual is required; RGBA8 is packed through the
 //! visual's masks into an `XImage` and presented with `XPutImage`.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void};
 use std::ptr::{null, null_mut};
 
@@ -161,8 +161,20 @@ struct XConfigureEvent {
 #[repr(C)]
 #[derive(Copy, Clone)]
 #[allow(dead_code)]
+struct XAnyEvent {
+    kind: c_int,
+    serial: c_ulong,
+    send_event: c_int,
+    display: *mut Display,
+    window: Window,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+#[allow(dead_code)]
 union XEvent {
     kind: c_int,
+    any: XAnyEvent,
     key: XKeyEvent,
     button: XButtonEvent,
     configure: XConfigureEvent,
@@ -194,6 +206,7 @@ type XSelectInputFn = unsafe extern "C" fn(*mut Display, Window, c_long) -> c_in
 type XMapWindowFn = unsafe extern "C" fn(*mut Display, Window) -> c_int;
 type XFlushFn = unsafe extern "C" fn(*mut Display) -> c_int;
 type XNextEventFn = unsafe extern "C" fn(*mut Display, *mut XEvent) -> c_int;
+type XPendingFn = unsafe extern "C" fn(*mut Display) -> c_int;
 type XCloseDisplayFn = unsafe extern "C" fn(*mut Display) -> c_int;
 type XPutImageFn = unsafe extern "C" fn(
     *mut Display,
@@ -255,6 +268,7 @@ const XN_CLIENT_WINDOW: &[u8] = b"clientWindow\0";
 const LOOKUP_BUFFER: usize = 64;
 const XIM_OPEN_ERROR: &str = "XOpenIM failed: the locale names no supported input method";
 const XIM_IC_ERROR: &str = "XCreateIC failed: the server accepts no supported input style";
+const X11_CLOSED_ERROR: &str = "the X11 display is closed";
 const RTLD_NOW: c_int = 2;
 const RTLD_LOCAL: c_int = 0;
 const X11_SONAMES: [&[u8]; 2] = [b"libX11.so.6\0", b"libX11.so\0"];
@@ -287,6 +301,7 @@ struct Xlib {
     map_window: XMapWindowFn,
     flush: XFlushFn,
     next_event: XNextEventFn,
+    pending: XPendingFn,
     close_display: XCloseDisplayFn,
     create_image: XImageCreateFn,
     put_image: XPutImageFn,
@@ -333,6 +348,7 @@ impl Xlib {
             map_window: symbol(handle, b"XMapWindow\0")?,
             flush: symbol(handle, b"XFlush\0")?,
             next_event: symbol(handle, b"XNextEvent\0")?,
+            pending: symbol(handle, b"XPending\0")?,
             close_display: symbol(handle, b"XCloseDisplay\0")?,
             create_image: symbol(handle, b"XCreateImage\0")?,
             put_image: symbol(handle, b"XPutImage\0")?,
@@ -413,6 +429,92 @@ pub struct X11Host {
     ime: ImeStatus,
     scale: f32,
     lib: Xlib,
+}
+
+/// Open a window's input method: a locale or server that refuses leaves raw
+/// keys only, reported as the typed status. Shared by the single- and
+/// multi-window hosts.
+/// shortcut: `XFilterEvent` is not wired; with the Nothing styles the input
+/// method draws its own windows, so no client-side filtering is due.
+fn setup_ime(
+    lib: &Xlib,
+    display: *mut Display,
+    window: Window,
+    xim_out: &mut *mut c_void,
+    xic_out: &mut *mut c_void,
+    status: &mut ImeStatus,
+) {
+    if display.is_null() || window == 0 {
+        return;
+    }
+    // SAFETY: the display is live and the variadic list is NULL-terminated.
+    let xim = unsafe { (lib.open_im)(display, null_mut(), null(), null()) };
+    if xim.is_null() {
+        *status = ImeStatus::Unavailable(XIM_OPEN_ERROR);
+        return;
+    }
+    let xic = unsafe {
+        (lib.create_ic)(
+            xim,
+            XN_INPUT_STYLE.as_ptr().cast::<c_char>(),
+            XIM_NOTHING_STYLE,
+            XN_CLIENT_WINDOW.as_ptr().cast::<c_char>(),
+            window,
+            std::ptr::null::<c_char>(),
+        )
+    };
+    if xic.is_null() {
+        unsafe { (lib.close_im)(xim) };
+        *status = ImeStatus::Unavailable(XIM_IC_ERROR);
+        return;
+    }
+    unsafe { (lib.set_ic_focus)(xic) };
+    *xim_out = xim;
+    *xic_out = xic;
+    *status = ImeStatus::Ready;
+}
+
+/// Compose one key press through the input method into `events`: bytes that
+/// form text become `Input` beside the raw `Key`.
+fn lookup_text(
+    lib: &Xlib,
+    xic: *mut c_void,
+    mut key: XKeyEvent,
+    events: &mut VecDeque<InputEvent>,
+) {
+    let mut buffer = [0u8; LOOKUP_BUFFER];
+    let mut keysym: c_long = 0;
+    let mut status: c_int = 0;
+    // SAFETY: the input context and the event are live objects of this host,
+    // and the buffer outlives the call.
+    let written = unsafe {
+        (lib.utf8_lookup)(
+            xic,
+            &mut key,
+            buffer.as_mut_ptr().cast::<c_char>(),
+            LOOKUP_BUFFER as c_int,
+            &mut keysym,
+            &mut status,
+        )
+    };
+    if written <= 0 {
+        return;
+    }
+    let text = String::from_utf8_lossy(&buffer[..written as usize]).into_owned();
+    if !text.is_empty() {
+        events.push_back(InputEvent::Input {
+            node_id: u32::MAX,
+            text,
+        });
+    }
+}
+
+/// One window's content scale from the screen's physical pixel density.
+fn screen_scale(lib: &Xlib, display: *mut Display, screen: c_int) -> f32 {
+    input_map::dpi_from_millimeters(
+        unsafe { (lib.display_width)(display, screen) } as u32,
+        unsafe { (lib.display_width_mm)(display, screen) } as u32,
+    )
 }
 
 impl X11Host {
@@ -511,13 +613,17 @@ impl X11Host {
                 "XSelectInput, XMapWindow or XFlush failed",
             ));
         }
-        host.setup_ime();
+        setup_ime(
+            &host.lib,
+            display,
+            host.window,
+            &mut host.xim,
+            &mut host.xic,
+            &mut host.ime,
+        );
         // The ABI's degradation for platforms without scale events: one Scale
         // at window build, from the screen's physical pixel density.
-        let scale = input_map::dpi_from_millimeters(
-            unsafe { (host.lib.display_width)(display, screen) } as u32,
-            unsafe { (host.lib.display_width_mm)(display, screen) } as u32,
-        );
+        let scale = screen_scale(&host.lib, display, screen);
         host.scale = scale;
         host.events.push_back(InputEvent::Scale { scale });
         Ok(host)
@@ -558,75 +664,6 @@ impl X11Host {
     /// the host with raw keys only, reported as a typed status.
     /// shortcut: `XFilterEvent` is not wired; with the Nothing styles the
     /// input method draws its own windows, so no client-side filtering is due.
-    fn setup_ime(&mut self) {
-        let display = self.display;
-        let window = self.window;
-        if self.closed || display.is_null() || window == 0 {
-            return;
-        }
-        // SAFETY: the display is live and the variadic list is NULL-terminated.
-        let xim = unsafe { (self.lib.open_im)(display, null_mut(), null(), null()) };
-        if xim.is_null() {
-            self.ime = ImeStatus::Unavailable(XIM_OPEN_ERROR);
-            return;
-        }
-        let xic = unsafe {
-            (self.lib.create_ic)(
-                xim,
-                XN_INPUT_STYLE.as_ptr().cast::<c_char>(),
-                XIM_NOTHING_STYLE,
-                XN_CLIENT_WINDOW.as_ptr().cast::<c_char>(),
-                window,
-                std::ptr::null::<c_char>(),
-            )
-        };
-        if xic.is_null() {
-            unsafe { (self.lib.close_im)(xim) };
-            self.ime = ImeStatus::Unavailable(XIM_IC_ERROR);
-            return;
-        }
-        unsafe { (self.lib.set_ic_focus)(xic) };
-        self.xim = xim;
-        self.xic = xic;
-        self.ime = ImeStatus::Ready;
-    }
-
-    /// Whether this window can compose text through the input method, probed
-    /// at open time from the live XIM/XIC pair.
-    pub fn ime(&self) -> ImeStatus {
-        self.ime
-    }
-
-    /// Compose one key press through the input method: bytes that form text
-    /// are queued as `Input` beside the raw `Key` event.
-    fn lookup_text(&mut self, mut key: XKeyEvent) {
-        let mut buffer = [0u8; LOOKUP_BUFFER];
-        let mut keysym: c_long = 0;
-        let mut status: c_int = 0;
-        // SAFETY: the input context, display and event are live objects of
-        // this host, and the buffer outlives the call.
-        let written = unsafe {
-            (self.lib.utf8_lookup)(
-                self.xic,
-                &mut key,
-                buffer.as_mut_ptr().cast::<c_char>(),
-                LOOKUP_BUFFER as c_int,
-                &mut keysym,
-                &mut status,
-            )
-        };
-        if written <= 0 {
-            return;
-        }
-        let text = String::from_utf8_lossy(&buffer[..written as usize]).into_owned();
-        if !text.is_empty() {
-            self.events.push_back(InputEvent::Input {
-                node_id: u32::MAX,
-                text,
-            });
-        }
-    }
-
     fn draw(&mut self, width: u32, height: u32, pixels: &[u8]) -> Result<(), AdapterError> {
         if self.closed {
             return Err(AdapterError::Backend("the X11 display is closed"));
@@ -714,7 +751,7 @@ impl X11Host {
                     pressed: kind == KEY_PRESS,
                 });
                 if kind == KEY_PRESS && !self.xic.is_null() {
-                    self.lookup_text(key);
+                    lookup_text(&self.lib, self.xic, key, &mut self.events);
                 }
             }
             BUTTON_PRESS => {
@@ -782,6 +819,475 @@ impl X11Host {
         }
         Ok(())
     }
+}
+
+/// A real multi-window X11 host: one display connection, 2..4 windows and a
+/// single event pump that dispatches by `XAnyEvent.window`, with the
+/// `WindowSet` model's index, broadcast and per-window present shape.
+/// `multi_window` reports true.
+///
+/// shortcut: compiled and unit-tested for the Linux target only, never
+/// executed here; the per-event mapping mirrors the single-window pump.
+pub struct X11MultiHost {
+    lib: Xlib,
+    display: *mut Display,
+    windows: BTreeMap<Window, X11Window>,
+    order: Vec<Window>,
+    closed: bool,
+}
+
+struct X11Window {
+    window: Window,
+    gc: GC,
+    masks: (u32, u32, u32, u32),
+    depth: c_uint,
+    viewport: Size,
+    events: VecDeque<InputEvent>,
+    last_frame: Vec<u8>,
+    ime: ImeStatus,
+    xim: *mut c_void,
+    xic: *mut c_void,
+    scale: f32,
+    alive: bool,
+}
+
+impl X11MultiHost {
+    /// Open 2..4 real windows on one display, one per size, in index order.
+    pub fn open<const N: usize>(sizes: [Size; N]) -> Result<Self, AdapterError> {
+        if !(2..=4).contains(&N) {
+            return Err(AdapterError::Backend(
+                crate::window_set::INVALID_WINDOW_COUNT,
+            ));
+        }
+        let mut sizes = sizes.into_iter();
+        let first = sizes.next().expect("2..=4 checked above");
+        let first_host = X11Host::open(first.width, first.height)?;
+        let display = first_host.display;
+        let lib = unsafe { std::ptr::read(&first_host.lib) };
+        std::mem::forget(first_host);
+        let screen = unsafe { (lib.default_screen)(display) };
+        let root = unsafe { (lib.root_window)(display, screen) };
+        let border = unsafe { (lib.black_pixel)(display, screen) };
+        let background = unsafe { (lib.white_pixel)(display, screen) };
+        let visual = unsafe { (lib.default_visual)(display, screen) };
+        let depth = unsafe { (lib.default_depth)(display, screen) } as c_uint;
+        let masks = {
+            let info = unsafe { &*visual };
+            let red = info.red_mask as u32;
+            let green = info.green_mask as u32;
+            let blue = info.blue_mask as u32;
+            (red, green, blue, 0xffff_ffff_u32 & !(red | green | blue))
+        };
+        let mut host = Self {
+            lib,
+            display,
+            windows: BTreeMap::new(),
+            order: Vec::new(),
+            closed: false,
+        };
+        let rest: Vec<Size> = sizes.collect();
+        for size in std::iter::once(first).chain(rest) {
+            let result = (|| -> Result<Window, AdapterError> {
+                checked_len(size.width, size.height)?;
+                let window = unsafe {
+                    (host.lib.create_simple_window)(
+                        display,
+                        root,
+                        0,
+                        0,
+                        size.width,
+                        size.height,
+                        0,
+                        border,
+                        background,
+                    )
+                };
+                if window == 0 {
+                    return Err(AdapterError::Backend("XCreateSimpleWindow failed"));
+                }
+                let gc = unsafe { (host.lib.create_gc)(display, window, 0, null_mut()) };
+                if gc.is_null() {
+                    unsafe { (host.lib.destroy_window)(display, window) };
+                    return Err(AdapterError::Backend("XCreateGC failed"));
+                }
+                let mask = KEY_PRESS_MASK
+                    | KEY_RELEASE_MASK
+                    | BUTTON_PRESS_MASK
+                    | BUTTON_RELEASE_MASK
+                    | POINTER_MOTION_MASK
+                    | EXPOSURE_MASK
+                    | STRUCTURE_NOTIFY_MASK;
+                let ready = unsafe {
+                    (host.lib.select_input)(display, window, mask) != 0
+                        && (host.lib.map_window)(display, window) != 0
+                };
+                if !ready {
+                    unsafe {
+                        (host.lib.free_gc)(display, gc);
+                        (host.lib.destroy_window)(display, window);
+                    }
+                    return Err(AdapterError::Backend("XSelectInput or XMapWindow failed"));
+                }
+                let mut xim = null_mut();
+                let mut xic = null_mut();
+                let mut ime = ImeStatus::Unavailable(XIM_OPEN_ERROR);
+                setup_ime(&host.lib, display, window, &mut xim, &mut xic, &mut ime);
+                let scale = screen_scale(&host.lib, display, screen);
+                let mut events = VecDeque::new();
+                events.push_back(InputEvent::Scale { scale });
+                host.windows.insert(
+                    window,
+                    X11Window {
+                        window,
+                        gc,
+                        masks,
+                        depth,
+                        viewport: size,
+                        events,
+                        last_frame: Vec::new(),
+                        ime,
+                        xim,
+                        xic,
+                        scale,
+                        alive: true,
+                    },
+                );
+                host.order.push(window);
+                Ok(window)
+            })();
+            if let Err(error) = result {
+                host.close();
+                return Err(error);
+            }
+        }
+        unsafe { (host.lib.flush)(display) };
+        Ok(host)
+    }
+
+    pub fn len(&self) -> usize {
+        self.order.len()
+    }
+
+    /// Whether this window can compose text through the input method.
+    pub fn ime(&self, index: usize) -> Result<ImeStatus, AdapterError> {
+        Ok(self.window(index)?.ime)
+    }
+
+    /// Raw framebuffer size of every window in index order.
+    pub fn viewports(&self) -> Vec<Size> {
+        self.order
+            .iter()
+            .filter_map(|id| self.windows.get(id).map(|w| w.viewport))
+            .collect()
+    }
+
+    fn window(&self, index: usize) -> Result<&X11Window, AdapterError> {
+        let id = self.order.get(index).ok_or(AdapterError::Backend(
+            crate::window_set::INVALID_WINDOW_INDEX,
+        ))?;
+        self.windows
+            .get(id)
+            .ok_or(AdapterError::Backend(X11_CLOSED_ERROR))
+    }
+
+    /// Deliver the same normalized input to every window.
+    pub fn broadcast_event(&mut self, event: InputEvent) {
+        for window in self.windows.values_mut() {
+            window.events.push_back(event.clone());
+        }
+    }
+
+    pub fn push_event(&mut self, index: usize, event: InputEvent) -> Result<(), AdapterError> {
+        self.window(index)?;
+        let id = self.order[index];
+        if let Some(window) = self.windows.get_mut(&id) {
+            window.events.push_back(event);
+        }
+        Ok(())
+    }
+
+    pub fn poll_event(&mut self, index: usize) -> Result<Option<InputEvent>, AdapterError> {
+        self.window(index)?;
+        let id = self.order[index];
+        let event = {
+            let window = self
+                .windows
+                .get_mut(&id)
+                .ok_or(AdapterError::Backend(X11_CLOSED_ERROR))?;
+            window.events.pop_front()
+        };
+        if let Some(InputEvent::Resize { size }) = &event {
+            if let Some(window) = self.windows.get_mut(&id) {
+                window.viewport = *size;
+            }
+        }
+        Ok(event)
+    }
+
+    pub fn viewport(&self, index: usize) -> Result<Size, AdapterError> {
+        Ok(self.window(index)?.viewport)
+    }
+
+    pub fn present(&mut self, index: usize, frame: FrameView<'_>) -> Result<(), AdapterError> {
+        self.window(index)?;
+        let expected = checked_len(frame.width, frame.height)?;
+        if frame.pixels.len() != expected {
+            return Err(AdapterError::InvalidFrame);
+        }
+        let id = self.order[index];
+        let window = self
+            .windows
+            .get_mut(&id)
+            .ok_or(AdapterError::Backend(X11_CLOSED_ERROR))?;
+        let packed = rgba_to_xpixel(frame.pixels, window.masks)?;
+        window.viewport = Size {
+            width: frame.width,
+            height: frame.height,
+        };
+        window.last_frame = packed.clone();
+        let (lib, display) = (&self.lib, self.display);
+        draw_window(lib, display, window, frame.width, frame.height, &packed)
+    }
+
+    /// Consume one X event, dispatching it to the window named by
+    /// `XAnyEvent.window`. An event for an unknown window is dropped.
+    pub fn pump(&mut self) -> Result<(), AdapterError> {
+        if self.closed {
+            return Err(AdapterError::Backend(X11_CLOSED_ERROR));
+        }
+        let mut event: XEvent = unsafe { std::mem::zeroed() };
+        unsafe { (self.lib.next_event)(self.display, &mut event) };
+        let target = unsafe { event.any.window };
+        let Some(window) = self.windows.get_mut(&target) else {
+            return Ok(());
+        };
+        dispatch_window(&self.lib, self.display, window, event)?;
+        Ok(())
+    }
+
+    /// Run until no window remains, pumping while `XPending` reports work and
+    /// sleeping one millisecond when idle.
+    pub fn run(&mut self) -> Result<(), AdapterError> {
+        while !self.closed && self.order.iter().any(|id| self.windows.contains_key(id)) {
+            if unsafe { (self.lib.pending)(self.display) } > 0 {
+                self.pump()?;
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn capabilities(&self) -> Capabilities {
+        let dpi_scale = self
+            .order
+            .first()
+            .and_then(|id| self.windows.get(id))
+            .map(|window| window.scale)
+            .unwrap_or(1.0);
+        Capabilities {
+            gpu: false,
+            native_embed: false,
+            multi_window: true,
+            lifecycle: true,
+            dpi_scale,
+        }
+    }
+
+    fn close(&mut self) {
+        if self.closed {
+            return;
+        }
+        let ids: Vec<Window> = self.order.clone();
+        for id in ids {
+            if let Some(window) = self.windows.remove(&id) {
+                destroy_window(&self.lib, self.display, window);
+            }
+        }
+        if !self.display.is_null() {
+            unsafe { (self.lib.close_display)(self.display) };
+            self.display = null_mut();
+        }
+        self.closed = true;
+    }
+}
+
+impl Drop for X11MultiHost {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+/// Destroy one window's gc, input-method objects and window.
+fn destroy_window(lib: &Xlib, display: *mut Display, window: X11Window) {
+    unsafe {
+        if !display.is_null() {
+            if !window.xic.is_null() {
+                (lib.destroy_ic)(window.xic);
+            }
+            if !window.xim.is_null() {
+                (lib.close_im)(window.xim);
+            }
+            if !window.gc.is_null() {
+                (lib.free_gc)(display, window.gc);
+            }
+            if window.window != 0 {
+                (lib.destroy_window)(display, window.window);
+            }
+        }
+    }
+}
+
+/// Draw one packed frame into its window and flush.
+fn draw_window(
+    lib: &Xlib,
+    display: *mut Display,
+    window: &X11Window,
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+) -> Result<(), AdapterError> {
+    let row_bytes = (width as usize)
+        .checked_mul(4)
+        .filter(|&row| row <= c_int::MAX as usize)
+        .ok_or(AdapterError::InvalidFrame)? as c_int;
+    let image = unsafe {
+        (lib.create_image)(
+            display,
+            null_mut(),
+            window.depth,
+            ZPIXMAP,
+            0,
+            null_mut(),
+            width,
+            height,
+            32,
+            row_bytes,
+        )
+    };
+    if image.is_null() {
+        return Err(AdapterError::Backend("XCreateImage failed"));
+    }
+    let result = unsafe {
+        let info = &mut *image;
+        let data_len = (info.bytes_per_line as usize)
+            .checked_mul(height as usize)
+            .unwrap_or(0);
+        if info.bits_per_pixel != 32
+            || info.data.is_null()
+            || data_len != pixels.len()
+            || data_len == 0
+        {
+            Err(AdapterError::Backend(
+                "XCreateImage returned an unsupported image",
+            ))
+        } else {
+            std::ptr::copy_nonoverlapping(pixels.as_ptr(), info.data.cast::<u8>(), pixels.len());
+            let put = (lib.put_image)(
+                display,
+                window.window,
+                window.gc,
+                image,
+                0,
+                0,
+                0,
+                0,
+                width,
+                height,
+            );
+            let flushed = (lib.flush)(display);
+            if put == 0 {
+                Err(AdapterError::Backend("XPutImage failed"))
+            } else if flushed == 0 {
+                Err(AdapterError::Backend("XFlush failed"))
+            } else {
+                Ok(())
+            }
+        }
+    };
+    unsafe { destroy_image(lib, image) };
+    result
+}
+
+/// Route one X event to the window it names: key/button/motion/wheel input,
+/// resize, expose (redraw) and destroy (destroy + mark dead).
+fn dispatch_window(
+    lib: &Xlib,
+    display: *mut Display,
+    window: &mut X11Window,
+    event: XEvent,
+) -> Result<(), AdapterError> {
+    let kind = unsafe { event.kind };
+    match kind {
+        KEY_PRESS | KEY_RELEASE => {
+            let key = unsafe { event.key };
+            window.events.push_back(InputEvent::Key {
+                code: key.keycode,
+                pressed: kind == KEY_PRESS,
+            });
+            if kind == KEY_PRESS && !window.xic.is_null() {
+                lookup_text(lib, window.xic, key, &mut window.events);
+            }
+        }
+        BUTTON_PRESS => {
+            let button = unsafe { event.button };
+            let (x, y) = (button.x as f32, button.y as f32);
+            match input_map::x11_scroll_notch(button.button) {
+                Some(delta) => window.events.push_back(InputEvent::Wheel { x, y, delta }),
+                None => window.events.push_back(InputEvent::Tap {
+                    x,
+                    y,
+                    node_id: u32::MAX,
+                }),
+            }
+        }
+        BUTTON_RELEASE => {
+            let button = unsafe { event.button };
+            if input_map::x11_scroll_notch(button.button).is_none() {
+                window.events.push_back(InputEvent::PointerUp {
+                    x: button.x as f32,
+                    y: button.y as f32,
+                });
+            }
+        }
+        MOTION_NOTIFY => {
+            let motion = unsafe { event.button };
+            window.events.push_back(input_map::pointer_move(
+                motion.state & BUTTON1_MASK != 0,
+                motion.x as f32,
+                motion.y as f32,
+            ));
+        }
+        CONFIGURE_NOTIFY => {
+            let configure = unsafe { event.configure };
+            window.events.push_back(InputEvent::Resize {
+                size: Size {
+                    width: u32::try_from(configure.width).unwrap_or(0),
+                    height: u32::try_from(configure.height).unwrap_or(0),
+                },
+            });
+        }
+        EXPOSE => {
+            if !window.last_frame.is_empty() {
+                draw_window(
+                    lib,
+                    display,
+                    window,
+                    window.viewport.width,
+                    window.viewport.height,
+                    &window.last_frame.clone(),
+                )?;
+            }
+        }
+        DESTROY_NOTIFY => {
+            window
+                .events
+                .push_back(InputEvent::Lifecycle(Lifecycle::Destroyed));
+            window.alive = false;
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 impl PlatformAdapter for X11Host {

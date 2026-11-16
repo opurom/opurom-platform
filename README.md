@@ -636,6 +636,12 @@ three times before the headless fallback takes over.
   TrueColor visual is also required at runtime. X11 has no scale event: the
   screen's physical pixel density stands in, emitted once as `Scale` at
   window build and reported by `capabilities().dpi_scale`.
+- `X11MultiHost::open()` opens 2..4 windows on **one** display connection and
+  pumps with a single `XNextEvent`, dispatching each event to the window named
+  by `XAnyEvent.window` (`XPending` drives the non-blocking `run` loop, sleeping
+  1 ms when idle). `poll_event`/`present(index)`/`broadcast_event` mirror the
+  `WindowSet` model's index shape; each window keeps its own gc, XIM/XIC and
+  scale. Compile-verified for the Linux target only; no X server runs here.
 - `WaylandHost::connect()` resolves `wl_display_connect`,
   `wl_display_disconnect`, `wl_display_get_error` and `wl_display_get_fd` from
   `libwayland-client.so.0`/`libwayland-client.so` with `dlopen`/`dlsym` at

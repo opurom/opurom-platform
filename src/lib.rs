@@ -113,7 +113,7 @@ pub use wayland::{Handshake, WaylandHost};
 #[cfg(target_os = "windows")]
 pub use win32::{Win32Host, Win32MultiHost};
 #[cfg(target_os = "linux")]
-pub use x11::X11Host;
+pub use x11::{X11Host, X11MultiHost};
 
 /// Logical viewport size in pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
