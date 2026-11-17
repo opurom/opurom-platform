@@ -140,9 +140,10 @@ pub struct FrameView<'a> {
 }
 
 /// Unified input, normalized from touch/mouse/keyboard by each adapter.
-/// `Tap` is a button **press/down**, not a completed tap: motion while held
-/// is `PointerDrag`, motion without a button is `PointerMove`, and release
-/// is `PointerUp`. Every pointer coordinate is a **logical layout pixel**:
+/// `Tap` is a button **press/down**, not Flutter's completed tap gesture:
+/// gesture acceptance belongs to the upstream arena, this ABI only reports
+/// raw edges. Motion while held is `PointerDrag`, motion without a button is
+/// `PointerMove`, and release is `PointerUp`. Every pointer coordinate is a **logical layout pixel**:
 /// adapters convert raw OS backing coordinates with the window's content
 /// scale (`input_map::logical_coord`, fixed-point `DPI_UNIT`) before emitting,
 /// so hit testing never sees physical pixels. `Wheel.delta` is one notch

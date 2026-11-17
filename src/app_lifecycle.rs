@@ -112,6 +112,12 @@ impl LifecycleTracker {
     }
 
     pub(crate) fn report(&mut self, target: Lifecycle) -> Vec<Lifecycle> {
+        // A destroyed window is terminal for this host; only explicit creation
+        // (a fresh tracker) can produce states again. A stray focus message
+        // must not revive it.
+        if self.current == Some(Lifecycle::Destroyed) {
+            return Vec::new();
+        }
         let changes = transitions(self.current, target);
         if let Some(last) = changes.last() {
             self.current = Some(*last);
@@ -204,6 +210,20 @@ mod tests {
         for (previous, next) in illegal {
             assert!(!can_transition(previous, next), "{previous:?} -> {next:?}");
         }
+    }
+
+    #[test]
+    fn destroyed_is_terminal_until_explicit_creation() {
+        let mut tracker = LifecycleTracker::new();
+        assert_eq!(
+            tracker.report(Lifecycle::Destroyed),
+            vec![Lifecycle::Destroyed]
+        );
+        assert!(tracker.report(Lifecycle::Resumed).is_empty());
+        assert!(tracker.report(Lifecycle::Inactive).is_empty());
+        assert_eq!(tracker.current(), Some(Lifecycle::Destroyed));
+        let mut created = LifecycleTracker::new();
+        assert_eq!(created.report(Lifecycle::Resumed), vec![Lifecycle::Resumed]);
     }
 
     #[test]
