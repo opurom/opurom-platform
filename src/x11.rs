@@ -13,6 +13,7 @@ use std::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void};
 use std::ptr::{null, null_mut};
 
 use crate::{
+    app_lifecycle::LifecycleTracker,
     ime::ImeStatus,
     input_map,
     x11_pixels::{checked_len, rgba_to_xpixel},
@@ -249,6 +250,8 @@ const MOTION_NOTIFY: c_int = 6;
 const EXPOSE: c_int = 12;
 const DESTROY_NOTIFY: c_int = 17;
 const CONFIGURE_NOTIFY: c_int = 22;
+const FOCUS_IN: c_int = 9;
+const FOCUS_OUT: c_int = 10;
 const KEY_PRESS_MASK: c_long = 1 << 0;
 const KEY_RELEASE_MASK: c_long = 1 << 1;
 const BUTTON_PRESS_MASK: c_long = 1 << 2;
@@ -256,6 +259,7 @@ const BUTTON_RELEASE_MASK: c_long = 1 << 3;
 const POINTER_MOTION_MASK: c_long = 1 << 6;
 const EXPOSURE_MASK: c_long = 1 << 15;
 const STRUCTURE_NOTIFY_MASK: c_long = 1 << 17;
+const FOCUS_CHANGE_MASK: c_long = 1 << 21;
 /// `Button1Mask` in an event's `state` field: the primary button is held.
 const BUTTON1_MASK: c_uint = 1 << 8;
 /// `XIMPreeditNothing | XIMStatusNothing`: the input method draws its own
@@ -428,6 +432,7 @@ pub struct X11Host {
     xic: *mut c_void,
     ime: ImeStatus,
     scale: f32,
+    lifecycle: LifecycleTracker,
     lib: Xlib,
 }
 
@@ -546,6 +551,7 @@ impl X11Host {
             xic: null_mut(),
             ime: ImeStatus::Unavailable(XIM_OPEN_ERROR),
             scale: 1.0,
+            lifecycle: LifecycleTracker::new(),
             lib,
         };
         let screen = unsafe { (host.lib.default_screen)(display) };
@@ -600,7 +606,8 @@ impl X11Host {
             | BUTTON_RELEASE_MASK
             | POINTER_MOTION_MASK
             | EXPOSURE_MASK
-            | STRUCTURE_NOTIFY_MASK;
+            | STRUCTURE_NOTIFY_MASK
+            | FOCUS_CHANGE_MASK;
         // SAFETY: all handles came from the live Xlib display above.
         let ready = unsafe {
             (host.lib.select_input)(display, host.window, mask) != 0
@@ -794,6 +801,16 @@ impl X11Host {
                     size: Size { width, height },
                 });
             }
+            FOCUS_IN => {
+                for state in self.lifecycle.report(Lifecycle::Resumed) {
+                    self.events.push_back(InputEvent::Lifecycle(state));
+                }
+            }
+            FOCUS_OUT => {
+                for state in self.lifecycle.report(Lifecycle::Inactive) {
+                    self.events.push_back(InputEvent::Lifecycle(state));
+                }
+            }
             EXPOSE => {
                 if !self.last_frame.is_empty() {
                     let frame = std::mem::take(&mut self.last_frame);
@@ -804,8 +821,9 @@ impl X11Host {
                 }
             }
             DESTROY_NOTIFY => {
-                self.events
-                    .push_back(InputEvent::Lifecycle(Lifecycle::Destroyed));
+                for state in self.lifecycle.report(Lifecycle::Destroyed) {
+                    self.events.push_back(InputEvent::Lifecycle(state));
+                }
                 self.close();
             }
             _ => {}
@@ -848,6 +866,7 @@ struct X11Window {
     xim: *mut c_void,
     xic: *mut c_void,
     scale: f32,
+    lifecycle: LifecycleTracker,
     alive: bool,
 }
 
@@ -916,7 +935,8 @@ impl X11MultiHost {
                     | BUTTON_RELEASE_MASK
                     | POINTER_MOTION_MASK
                     | EXPOSURE_MASK
-                    | STRUCTURE_NOTIFY_MASK;
+                    | STRUCTURE_NOTIFY_MASK
+                    | FOCUS_CHANGE_MASK;
                 let ready = unsafe {
                     (host.lib.select_input)(display, window, mask) != 0
                         && (host.lib.map_window)(display, window) != 0
@@ -949,6 +969,7 @@ impl X11MultiHost {
                         xim,
                         xic,
                         scale,
+                        lifecycle: LifecycleTracker::new(),
                         alive: true,
                     },
                 );
@@ -1267,6 +1288,16 @@ fn dispatch_window(
                 },
             });
         }
+        FOCUS_IN => {
+            for state in window.lifecycle.report(Lifecycle::Resumed) {
+                window.events.push_back(InputEvent::Lifecycle(state));
+            }
+        }
+        FOCUS_OUT => {
+            for state in window.lifecycle.report(Lifecycle::Inactive) {
+                window.events.push_back(InputEvent::Lifecycle(state));
+            }
+        }
         EXPOSE => {
             if !window.last_frame.is_empty() {
                 draw_window(
@@ -1280,9 +1311,9 @@ fn dispatch_window(
             }
         }
         DESTROY_NOTIFY => {
-            window
-                .events
-                .push_back(InputEvent::Lifecycle(Lifecycle::Destroyed));
+            for state in window.lifecycle.report(Lifecycle::Destroyed) {
+                window.events.push_back(InputEvent::Lifecycle(state));
+            }
             window.alive = false;
         }
         _ => {}

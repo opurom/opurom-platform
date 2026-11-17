@@ -28,10 +28,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW, LoadCursorW,
     PostQuitMessage, RegisterClassW, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
     CW_USEDEFAULT, IDC_ARROW, MSG, SW_SHOW, WM_CHAR, WM_DESTROY, WM_DPICHANGED, WM_IME_COMPOSITION,
-    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT,
-    WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_PAINT, WM_SETFOCUS, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
+use crate::app_lifecycle::LifecycleTracker;
 use crate::ime::{self, ImeStatus};
 use crate::input_map;
 use crate::{AdapterError, Capabilities, FrameView, InputEvent, Lifecycle, PlatformAdapter, Size};
@@ -53,6 +54,8 @@ struct Win32State {
     pending_char: Option<u16>,
     /// The content scale the window currently renders at.
     scale: f32,
+    /// Application lifecycle cursor fed by focus messages.
+    lifecycle: LifecycleTracker,
 }
 
 impl Win32State {
@@ -64,6 +67,7 @@ impl Win32State {
             events: Vec::new(),
             pending_char: None,
             scale: 1.0,
+            lifecycle: LifecycleTracker::new(),
         }
     }
 }
@@ -72,6 +76,16 @@ fn windows() -> Result<MutexGuard<'static, BTreeMap<HWND, Win32State>>, AdapterE
     WINDOWS
         .lock()
         .map_err(|_| AdapterError::Backend(INVALID_STATE))
+}
+
+fn push_lifecycle(hwnd: HWND, target: Lifecycle) {
+    if let Ok(mut windows) = WINDOWS.lock() {
+        if let Some(state) = windows.get_mut(&hwnd) {
+            for change in state.lifecycle.report(target) {
+                state.events.push(InputEvent::Lifecycle(change));
+            }
+        }
+    }
 }
 
 fn push_event(hwnd: HWND, event: InputEvent) {
@@ -279,7 +293,7 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_DESTROY => {
-            push_event(hwnd, InputEvent::Lifecycle(Lifecycle::Destroyed));
+            push_lifecycle(hwnd, Lifecycle::Destroyed);
             // Quit the pump only when the last window closes, so a
             // multi-window host keeps serving its survivors.
             let last = WINDOWS
@@ -289,6 +303,14 @@ unsafe extern "system" fn window_proc(
             if last {
                 PostQuitMessage(0);
             }
+            0
+        }
+        WM_SETFOCUS => {
+            push_lifecycle(hwnd, Lifecycle::Resumed);
+            0
+        }
+        WM_KILLFOCUS => {
+            push_lifecycle(hwnd, Lifecycle::Inactive);
             0
         }
         WM_SIZE => {

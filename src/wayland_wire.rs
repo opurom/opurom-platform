@@ -498,19 +498,26 @@ pub fn decode_xdg_configure_serial(body: &[u8]) -> Result<u32, AdapterError> {
 
 /// `xdg_toplevel.configure(int width, int height, array states)`: a zero
 /// width or height means the client decides its own dimension. The states
-/// array is validated and otherwise ignored — no state changes the ABI yet.
-pub fn decode_toplevel_configure(body: &[u8]) -> Result<(i32, i32), AdapterError> {
+/// array is validated and reduced to the one bit the lifecycle stream needs:
+/// `activated` (xdg-shell 1.42, value 4).
+pub fn decode_toplevel_configure(body: &[u8]) -> Result<(i32, i32, bool), AdapterError> {
     if body.len() < 12 {
         return Err(AdapterError::Backend(BAD_XDG_BODY));
     }
     let width = i32::from_ne_bytes([body[0], body[1], body[2], body[3]]);
     let height = i32::from_ne_bytes([body[4], body[5], body[6], body[7]]);
     let states_len = u32::from_ne_bytes([body[8], body[9], body[10], body[11]]) as usize;
+    if states_len % 4 != 0 {
+        return Err(AdapterError::Backend(BAD_XDG_BODY));
+    }
     let padded = word_align(states_len)?;
     if body.len() != 12 + padded {
         return Err(AdapterError::Backend(BAD_XDG_BODY));
     }
-    Ok((width, height))
+    let activated = body[12..12 + states_len]
+        .chunks_exact(4)
+        .any(|word| u32::from_ne_bytes([word[0], word[1], word[2], word[3]]) == 4);
+    Ok((width, height, activated))
 }
 
 /// `xdg_toplevel.close` and `wl_buffer.release` carry no arguments.
@@ -1425,9 +1432,20 @@ mod tests {
         body.extend_from_slice(&320i32.to_ne_bytes());
         body.extend_from_slice(&200i32.to_ne_bytes());
         body.extend_from_slice(&0u32.to_ne_bytes()); // no states
-        assert_eq!(decode_toplevel_configure(&body).unwrap(), (320, 200));
+        assert_eq!(decode_toplevel_configure(&body).unwrap(), (320, 200, false));
+        let mut activated = Vec::new();
+        activated.extend_from_slice(&320i32.to_ne_bytes());
+        activated.extend_from_slice(&200i32.to_ne_bytes());
+        activated.extend_from_slice(&4u32.to_ne_bytes()); // one activated state
+        activated.extend_from_slice(&4u32.to_ne_bytes());
+        assert_eq!(
+            decode_toplevel_configure(&activated).unwrap(),
+            (320, 200, true)
+        );
         body.extend_from_slice(&[4]); // trailing padding breaks the length
         assert!(decode_toplevel_configure(&body).is_err());
+        activated[8..12].copy_from_slice(&3u32.to_ne_bytes()); // not a uint array
+        assert!(decode_toplevel_configure(&activated).is_err());
         assert!(decode_empty_event(&[0u8; 4]).is_err());
         assert_eq!(decode_empty_event(&[]), Ok(()));
     }

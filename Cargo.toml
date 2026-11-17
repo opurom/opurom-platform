@@ -5,10 +5,14 @@ edition = "2021"
 description = "Opurom platform adapter ABI, capability registry and host adapters"
 
 [dependencies]
-png = "0.17.16"
 sha2 = "0.10.9"
 aes-gcm = "0.10.3"
 getrandom = "0.2.15"
+
+[dev-dependencies]
+# Tests encode/decode PNG fixtures on every host; the library itself needs
+# `png` only on macOS.
+png = "0.17.16"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -28,6 +32,7 @@ windows-sys = { version = "=0.52.0", features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+png = "0.17.16"
 core-graphics = "0.25.0"
 objc2-avf-audio = { version = "0.3.2", default-features = false, features = [
     "AVAudioPlayer",

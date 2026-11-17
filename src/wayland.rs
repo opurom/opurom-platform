@@ -14,6 +14,7 @@ use std::ffi::{c_char, c_int, c_short, c_ulong, c_void, CString};
 use std::ptr::null_mut;
 use std::time::{Duration, Instant};
 
+use crate::app_lifecycle::LifecycleTracker;
 use crate::ime::{self, ImeStatus, TextComposer};
 use crate::input_map::{self, wire_input};
 use crate::wayland_scale::OutputScales;
@@ -232,6 +233,8 @@ pub struct WaylandHost {
     text_id: u32,
     composer: TextComposer,
     ime_status: Option<ImeStatus>,
+    /// Application lifecycle cursor fed by the toplevel configure states.
+    lifecycle: LifecycleTracker,
     /// All announced `wl_output` globals, in registry order.
     output_globals: Vec<(u32, u32)>,
     /// Scale state of the bound outputs and of the surface's current output.
@@ -312,6 +315,7 @@ impl WaylandHost {
             text_id: 0,
             composer: TextComposer::default(),
             ime_status: None,
+            lifecycle: LifecycleTracker::new(),
             output_globals: Vec::new(),
             output_scales: OutputScales::default(),
             outputs_bound: false,
@@ -579,7 +583,16 @@ impl WaylandHost {
             {
                 match header.opcode {
                     XDG_TOPLEVEL_CONFIGURE => {
-                        let (width, height) = decode_toplevel_configure(body)?;
+                        let (width, height, activated) = decode_toplevel_configure(body)?;
+                        let target = if activated {
+                            Lifecycle::Resumed
+                        } else {
+                            Lifecycle::Inactive
+                        };
+                        for state in self.lifecycle.report(target) {
+                            self.events.push_back(InputEvent::Lifecycle(state));
+                            queued += 1;
+                        }
                         // Zero or negative means the client decides; the
                         // requested size stands until a real size arrives.
                         if width > 0 && height > 0 {
@@ -590,9 +603,10 @@ impl WaylandHost {
                         }
                     }
                     XDG_TOPLEVEL_CLOSE => {
-                        self.events
-                            .push_back(InputEvent::Lifecycle(Lifecycle::Destroyed));
-                        queued += 1;
+                        for state in self.lifecycle.report(Lifecycle::Destroyed) {
+                            self.events.push_back(InputEvent::Lifecycle(state));
+                            queued += 1;
+                        }
                     }
                     _ => {}
                 }

@@ -55,6 +55,11 @@ pub mod wayland_wire;
 // Pure output-scale state shared by the Linux host and its tests.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod wayland_scale;
+// Application lifecycle state machine shared by the native hosts.
+#[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
+mod app_lifecycle;
+
+pub use app_lifecycle::frames_enabled;
 
 #[cfg(target_os = "macos")]
 mod appkit;
@@ -159,6 +164,8 @@ pub enum InputEvent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lifecycle {
     Resumed,
+    Inactive,
+    Hidden,
     Paused,
     Destroyed,
 }
