@@ -3,11 +3,11 @@
 //! can exercise without a window server.
 
 use opurom_platform::input_map::{
-    dpi_from_millimeters, dpi_scale, pointer_move, wayland_wheel_delta, wheel_delta, wire_input,
-    x11_scroll_notch,
+    dpi_from_millimeters, dpi_scale, logical_coord, logical_size, pointer_move,
+    wayland_wheel_delta, wheel_delta, wire_input, x11_scroll_notch,
 };
 use opurom_platform::wayland_wire::{decode_event, WireEvent};
-use opurom_platform::InputEvent;
+use opurom_platform::{InputEvent, Size};
 
 // ---------------------------------------------------------------- pointer
 
@@ -20,6 +20,74 @@ fn a_move_is_a_drag_only_while_a_button_is_held() {
     assert_eq!(
         pointer_move(true, 3.0, 4.0),
         InputEvent::PointerDrag { x: 3.0, y: 4.0 }
+    );
+}
+
+// ---------------------------------------------------------------- coordinates
+
+#[test]
+fn physical_coordinates_convert_to_logical_pixels() {
+    assert_eq!(logical_coord(100.0, 1.0), 100.0);
+    assert_eq!(logical_coord(100.0, 2.0), 50.0);
+    assert_eq!(logical_coord(100.0, 1.25), 80.0);
+    let thirds = logical_coord(100.0, 1.5);
+    assert!((thirds - 200.0 / 3.0).abs() < 0.001, "{thirds}");
+    assert_eq!(logical_coord(0.0, 2.0), 0.0);
+    assert_eq!(logical_coord(-100.0, 2.0), -50.0);
+}
+
+#[test]
+fn invalid_scales_degrade_to_identity_and_stay_deterministic() {
+    assert_eq!(logical_coord(42.0, 0.0), 42.0);
+    assert_eq!(logical_coord(42.0, -1.0), 42.0);
+    assert_eq!(logical_coord(42.0, f32::NAN), 42.0);
+    assert_eq!(logical_coord(42.0, f32::INFINITY), 42.0);
+    assert_eq!(
+        logical_coord(123.4, 1.5).to_bits(),
+        logical_coord(123.4, 1.5).to_bits()
+    );
+}
+
+#[test]
+fn logical_viewports_round_to_whole_pixels() {
+    assert_eq!(
+        logical_size(
+            Size {
+                width: 800,
+                height: 600
+            },
+            2.0
+        ),
+        Size {
+            width: 400,
+            height: 300
+        }
+    );
+    assert_eq!(
+        logical_size(
+            Size {
+                width: 801,
+                height: 601
+            },
+            1.5
+        ),
+        Size {
+            width: 534,
+            height: 401
+        }
+    );
+    assert_eq!(
+        logical_size(
+            Size {
+                width: 0,
+                height: 0
+            },
+            2.0
+        ),
+        Size {
+            width: 0,
+            height: 0
+        }
     );
 }
 

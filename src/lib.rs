@@ -140,13 +140,18 @@ pub struct FrameView<'a> {
 }
 
 /// Unified input, normalized from touch/mouse/keyboard by each adapter.
-/// The pointer stream reads as `Tap` (press) → `PointerMove`/`PointerDrag`
-/// (motion with no button held / with one held) → `PointerUp` (release);
-/// `Wheel` is one scroll notch at the pointer with `delta` normalized so
-/// `1.0` is one notch away from the user (scrolled up). `Scale` reports a
-/// window's content scale change (HiDPI moves across screens); adapters
-/// whose platform exposes no scale event emit it once at window creation
-/// and never again.
+/// `Tap` is a button **press/down**, not a completed tap: motion while held
+/// is `PointerDrag`, motion without a button is `PointerMove`, and release
+/// is `PointerUp`. Every pointer coordinate is a **logical layout pixel**:
+/// adapters convert raw OS backing coordinates with the window's content
+/// scale (`input_map::logical_coord`, fixed-point `DPI_UNIT`) before emitting,
+/// so hit testing never sees physical pixels. `Wheel.delta` is one notch
+/// away from the user per `1.0`. `Resize.size` is logical; a presented
+/// `FrameView` is physical backing pixels, sized `logical_size * scale`.
+/// `Scale` reports a content-scale change; consumers keep the logical size
+/// and re-raster at the new backing size, while the next pointer event
+/// already uses the new scale. Hosts with no scale event emit `Scale{1.0}`
+/// once at window creation.
 #[derive(Clone, Debug, PartialEq)]
 pub enum InputEvent {
     Tap { x: f32, y: f32, node_id: u32 },

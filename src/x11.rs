@@ -414,6 +414,14 @@ unsafe fn destroy_image(lib: &Xlib, image: *mut XImage) {
     }
 }
 
+/// Raw X coordinates to logical layout pixels for one window's scale.
+fn logical_xy(scale: f32, x: f32, y: f32) -> (f32, f32) {
+    (
+        input_map::logical_coord(x, scale),
+        input_map::logical_coord(y, scale),
+    )
+}
+
 /// A live X11 window host. `pump()` consumes one `XNextEvent`; `run()` pumps
 /// until the window is destroyed. Xlib is loaded only when `open()` is called.
 pub struct X11Host {
@@ -632,7 +640,11 @@ impl X11Host {
         // at window build, from the screen's physical pixel density.
         let scale = screen_scale(&host.lib, display, screen);
         host.scale = scale;
+        host.viewport = input_map::logical_size(host.viewport, scale);
         host.events.push_back(InputEvent::Scale { scale });
+        host.events.push_back(InputEvent::Resize {
+            size: host.viewport,
+        });
         Ok(host)
     }
 
@@ -763,7 +775,7 @@ impl X11Host {
             }
             BUTTON_PRESS => {
                 let button = unsafe { event.button };
-                let (x, y) = (button.x as f32, button.y as f32);
+                let (x, y) = logical_xy(self.scale, button.x as f32, button.y as f32);
                 match input_map::x11_scroll_notch(button.button) {
                     Some(delta) => self.events.push_back(InputEvent::Wheel { x, y, delta }),
                     None => self.events.push_back(InputEvent::Tap {
@@ -777,20 +789,19 @@ impl X11Host {
                 let button = unsafe { event.button };
                 // A scroll notch reports no release of its own in the ABI.
                 if input_map::x11_scroll_notch(button.button).is_none() {
-                    self.events.push_back(InputEvent::PointerUp {
-                        x: button.x as f32,
-                        y: button.y as f32,
-                    });
+                    let (x, y) = logical_xy(self.scale, button.x as f32, button.y as f32);
+                    self.events.push_back(InputEvent::PointerUp { x, y });
                 }
             }
             MOTION_NOTIFY => {
                 // A motion event shares the button event's field layout
                 // through `state`, which is all this arm reads.
                 let motion = unsafe { event.button };
+                let (x, y) = logical_xy(self.scale, motion.x as f32, motion.y as f32);
                 self.events.push_back(input_map::pointer_move(
                     motion.state & BUTTON1_MASK != 0,
-                    motion.x as f32,
-                    motion.y as f32,
+                    x,
+                    y,
                 ));
             }
             CONFIGURE_NOTIFY => {
@@ -798,7 +809,7 @@ impl X11Host {
                 let width = u32::try_from(configure.width).unwrap_or(0);
                 let height = u32::try_from(configure.height).unwrap_or(0);
                 self.events.push_back(InputEvent::Resize {
-                    size: Size { width, height },
+                    size: input_map::logical_size(Size { width, height }, self.scale),
                 });
             }
             FOCUS_IN => {
@@ -860,6 +871,8 @@ struct X11Window {
     masks: (u32, u32, u32, u32),
     depth: c_uint,
     viewport: Size,
+    /// Physical backing size of `last_frame`; the viewport stays logical.
+    frame_size: Size,
     events: VecDeque<InputEvent>,
     last_frame: Vec<u8>,
     ime: ImeStatus,
@@ -955,6 +968,9 @@ impl X11MultiHost {
                 let scale = screen_scale(&host.lib, display, screen);
                 let mut events = VecDeque::new();
                 events.push_back(InputEvent::Scale { scale });
+                events.push_back(InputEvent::Resize {
+                    size: input_map::logical_size(size, scale),
+                });
                 host.windows.insert(
                     window,
                     X11Window {
@@ -962,7 +978,8 @@ impl X11MultiHost {
                         gc,
                         masks,
                         depth,
-                        viewport: size,
+                        viewport: input_map::logical_size(size, scale),
+                        frame_size: size,
                         events,
                         last_frame: Vec::new(),
                         ime,
@@ -1061,7 +1078,7 @@ impl X11MultiHost {
             .get_mut(&id)
             .ok_or(AdapterError::Backend(X11_CLOSED_ERROR))?;
         let packed = rgba_to_xpixel(frame.pixels, window.masks)?;
-        window.viewport = Size {
+        window.frame_size = Size {
             width: frame.width,
             height: frame.height,
         };
@@ -1252,7 +1269,7 @@ fn dispatch_window(
         }
         BUTTON_PRESS => {
             let button = unsafe { event.button };
-            let (x, y) = (button.x as f32, button.y as f32);
+            let (x, y) = logical_xy(window.scale, button.x as f32, button.y as f32);
             match input_map::x11_scroll_notch(button.button) {
                 Some(delta) => window.events.push_back(InputEvent::Wheel { x, y, delta }),
                 None => window.events.push_back(InputEvent::Tap {
@@ -1265,27 +1282,27 @@ fn dispatch_window(
         BUTTON_RELEASE => {
             let button = unsafe { event.button };
             if input_map::x11_scroll_notch(button.button).is_none() {
-                window.events.push_back(InputEvent::PointerUp {
-                    x: button.x as f32,
-                    y: button.y as f32,
-                });
+                let (x, y) = logical_xy(window.scale, button.x as f32, button.y as f32);
+                window.events.push_back(InputEvent::PointerUp { x, y });
             }
         }
         MOTION_NOTIFY => {
             let motion = unsafe { event.button };
+            let (x, y) = logical_xy(window.scale, motion.x as f32, motion.y as f32);
             window.events.push_back(input_map::pointer_move(
                 motion.state & BUTTON1_MASK != 0,
-                motion.x as f32,
-                motion.y as f32,
+                x,
+                y,
             ));
         }
         CONFIGURE_NOTIFY => {
             let configure = unsafe { event.configure };
+            let client = Size {
+                width: u32::try_from(configure.width).unwrap_or(0),
+                height: u32::try_from(configure.height).unwrap_or(0),
+            };
             window.events.push_back(InputEvent::Resize {
-                size: Size {
-                    width: u32::try_from(configure.width).unwrap_or(0),
-                    height: u32::try_from(configure.height).unwrap_or(0),
-                },
+                size: input_map::logical_size(client, window.scale),
             });
         }
         FOCUS_IN => {
@@ -1304,8 +1321,8 @@ fn dispatch_window(
                     lib,
                     display,
                     window,
-                    window.viewport.width,
-                    window.viewport.height,
+                    window.frame_size.width,
+                    window.frame_size.height,
                     &window.last_frame.clone(),
                 )?;
             }

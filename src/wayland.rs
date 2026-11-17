@@ -444,9 +444,13 @@ impl WaylandHost {
                     WL_POINTER_ENTER => {
                         let (_, surface, x, y) = decode_pointer_enter(body)?;
                         let ours = self.is_our_surface(surface);
+                        let scale = self.output_scales.current();
                         let frame = &mut self.pointer_frame;
                         frame.surface = surface;
-                        frame.position = Some((fixed_to_f32(x), fixed_to_f32(y)));
+                        frame.position = Some((
+                            input_map::logical_coord(fixed_to_f32(x), scale),
+                            input_map::logical_coord(fixed_to_f32(y), scale),
+                        ));
                         if !ours {
                             frame.surface = 0;
                         }
@@ -461,7 +465,11 @@ impl WaylandHost {
                     WL_POINTER_MOTION => {
                         let (x, y) = decode_pointer_motion(body)?;
                         if self.pointer_frame.surface != 0 {
-                            self.pointer_frame.position = Some((fixed_to_f32(x), fixed_to_f32(y)));
+                            let scale = self.output_scales.current();
+                            self.pointer_frame.position = Some((
+                                input_map::logical_coord(fixed_to_f32(x), scale),
+                                input_map::logical_coord(fixed_to_f32(y), scale),
+                            ));
                             self.pointer_frame.moved = true;
                         }
                     }
@@ -547,8 +555,7 @@ impl WaylandHost {
                     WL_OUTPUT_DONE => {
                         decode_empty_event(body)?;
                         if let Some(scale) = self.output_scales.done(header.object_id) {
-                            self.events.push_back(InputEvent::Scale { scale });
-                            queued += 1;
+                            queued += self.emit_backing_change(scale);
                         }
                     }
                     // geometry/mode and the v2 name/description frames carry
@@ -565,8 +572,7 @@ impl WaylandHost {
                             self.output_scales.leave(output)
                         };
                         if let Some(scale) = scale {
-                            self.events.push_back(InputEvent::Scale { scale });
-                            queued += 1;
+                            queued += self.emit_backing_change(scale);
                         }
                     }
                     // v6 preferred_buffer_scale is a second scale source;
@@ -1059,13 +1065,39 @@ impl WaylandHost {
             size,
         });
         self.scale()?;
-        self.events.push_back(InputEvent::Resize { size });
+        self.events.push_back(InputEvent::Resize {
+            size: input_map::logical_size(size, self.output_scales.current()),
+        });
         Ok(())
     }
 
-    /// The configured size of the open window, if any.
+    /// One backing change: the scale event plus a logical resize at the same
+    /// physical configuration, so the consumer relayouts and re-rasters.
+    fn emit_backing_change(&mut self, scale: f32) -> usize {
+        self.events.push_back(InputEvent::Scale { scale });
+        let logical = self
+            .window
+            .as_ref()
+            .map(|window| input_map::logical_size(window.size, scale));
+        if let Some(size) = logical {
+            self.events.push_back(InputEvent::Resize { size });
+            2
+        } else {
+            1
+        }
+    }
+
+    /// The configured backing size of the open window, in physical pixels.
     pub fn window_size(&self) -> Option<Size> {
         self.window.as_ref().map(|window| window.size)
+    }
+
+    /// The same window in logical layout pixels.
+    pub fn logical_window_size(&self) -> Option<Size> {
+        let scale = self.output_scales.current();
+        self.window
+            .as_ref()
+            .map(|window| input_map::logical_size(window.size, scale))
     }
 
     /// Copy one ABGR/RGBA frame into a released shm buffer and commit it.

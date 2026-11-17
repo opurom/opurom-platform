@@ -160,6 +160,27 @@ fn pointer(lparam: LPARAM) -> (f32, f32) {
     )
 }
 
+fn state_scale(hwnd: HWND) -> f32 {
+    windows()
+        .ok()
+        .and_then(|windows| windows.get(&hwnd).map(|state| state.scale))
+        .unwrap_or(1.0)
+}
+
+/// Raw client-area pixels to logical layout pixels for one window.
+fn logical_xy(hwnd: HWND, x: f32, y: f32) -> (f32, f32) {
+    let scale = state_scale(hwnd);
+    (
+        input_map::logical_coord(x, scale),
+        input_map::logical_coord(y, scale),
+    )
+}
+
+fn logical_pointer(hwnd: HWND, lparam: LPARAM) -> (f32, f32) {
+    let (x, y) = pointer(lparam);
+    logical_xy(hwnd, x, y)
+}
+
 fn checked_len(width: u32, height: u32) -> Result<usize, AdapterError> {
     if width == 0 || height == 0 || width > i32::MAX as u32 || height > i32::MAX as u32 {
         return Err(AdapterError::InvalidFrame);
@@ -315,18 +336,20 @@ unsafe extern "system" fn window_proc(
         }
         WM_SIZE => {
             let packed = lparam as u32;
-            let width = (packed & 0xffff) as u32;
-            let height = ((packed >> 16) & 0xffff) as u32;
+            let client = Size {
+                width: (packed & 0xffff) as u32,
+                height: ((packed >> 16) & 0xffff) as u32,
+            };
             push_event(
                 hwnd,
                 InputEvent::Resize {
-                    size: Size { width, height },
+                    size: input_map::logical_size(client, state_scale(hwnd)),
                 },
             );
             0
         }
         WM_LBUTTONDOWN => {
-            let (x, y) = pointer(lparam);
+            let (x, y) = logical_pointer(hwnd, lparam);
             push_event(
                 hwnd,
                 InputEvent::Tap {
@@ -338,12 +361,12 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_LBUTTONUP => {
-            let (x, y) = pointer(lparam);
+            let (x, y) = logical_pointer(hwnd, lparam);
             push_event(hwnd, InputEvent::PointerUp { x, y });
             0
         }
         WM_MOUSEMOVE => {
-            let (x, y) = pointer(lparam);
+            let (x, y) = logical_pointer(hwnd, lparam);
             let pressed = (wparam as u32) & MK_LBUTTON != 0;
             push_event(hwnd, input_map::pointer_move(pressed, x, y));
             0
@@ -360,14 +383,8 @@ unsafe extern "system" fn window_proc(
                 y: ((lparam as u32 >> 16) & 0xffff) as u16 as i16 as i32,
             };
             if delta != 0.0 && ScreenToClient(hwnd, &mut point) != 0 {
-                push_event(
-                    hwnd,
-                    InputEvent::Wheel {
-                        x: point.x as f32,
-                        y: point.y as f32,
-                        delta,
-                    },
-                );
+                let (x, y) = logical_xy(hwnd, point.x as f32, point.y as f32);
+                push_event(hwnd, InputEvent::Wheel { x, y, delta });
             }
             0
         }
@@ -396,9 +413,25 @@ unsafe extern "system" fn window_proc(
                     }
                 }
             }
+            // The backing scale changed but the client area did not: re-emit
+            // the logical viewport so the consumer relayouts and re-rasters,
+            // then invalidate so the next present is painted immediately.
+            let mut rect: windows_sys::Win32::Foundation::RECT = unsafe { std::mem::zeroed() };
+            if unsafe { GetClientRect(hwnd, &mut rect) } != 0 {
+                let client = Size {
+                    width: rect.right.max(0) as u32,
+                    height: rect.bottom.max(0) as u32,
+                };
+                push_event(
+                    hwnd,
+                    InputEvent::Resize {
+                        size: input_map::logical_size(client, scale),
+                    },
+                );
+            }
+            unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
             // shortcut: the suggested window rect in lParam is not applied;
-            // 0.1.0 presents unscaled frames, so the scale is the only DPI
-            // effect here.
+            // the logical viewport and the backing scale carry the DPI change.
             0
         }
         WM_IME_COMPOSITION => {
@@ -462,6 +495,8 @@ impl Win32Host {
         // The ABI's degradation for platforms without scale events: one Scale
         // at window build. Windows follows with WM_DPICHANGED.
         push_event(hwnd, InputEvent::Scale { scale });
+        let logical = input_map::logical_size(Size { width, height }, scale);
+        push_event(hwnd, InputEvent::Resize { size: logical });
         let ime = unsafe {
             let himc = ImmGetContext(hwnd);
             let ready = himc != 0;
@@ -480,7 +515,7 @@ impl Win32Host {
         }
         Ok(Self {
             hwnd,
-            viewport: Size { width, height },
+            viewport: input_map::logical_size(Size { width, height }, scale),
             ime,
         })
     }
@@ -643,13 +678,15 @@ impl Win32MultiHost {
                     state.events.clear();
                     state.scale = scale;
                 }
-                // The build-time Scale, once per window.
+                // The build-time Scale and the logical viewport, once per window.
                 push_event(hwnd, InputEvent::Scale { scale });
+                let logical = input_map::logical_size(size, scale);
+                push_event(hwnd, InputEvent::Resize { size: logical });
                 unsafe {
                     ShowWindow(hwnd, SW_SHOW);
                 }
                 hwnds.push(hwnd);
-                viewports.push(size);
+                viewports.push(logical);
             }
             Ok(())
         })();

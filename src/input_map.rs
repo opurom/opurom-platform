@@ -3,6 +3,7 @@
 //! wire frames through [`wire_input`], so every rule in the pointer stream is
 //! testable on every host without a window server.
 
+use crate::display_geometry::DPI_UNIT;
 use crate::wayland_wire::WireEvent;
 use crate::{InputEvent, Size};
 
@@ -20,6 +21,40 @@ pub fn pointer_move(pressed: bool, x: f32, y: f32) -> InputEvent {
 /// down).
 pub fn wheel_delta(raw: i16) -> f32 {
     raw as f32 / 120.0
+}
+
+fn fixed_scale(scale: f32) -> i128 {
+    let fixed = if scale.is_finite() && scale > 0.0 {
+        (scale * DPI_UNIT as f32).round()
+    } else {
+        DPI_UNIT as f32
+    };
+    (fixed as i128).max(1)
+}
+
+/// Convert one physical (backing) pointer coordinate to the ABI's logical
+/// pixels. The window scale is snapped to the fixed-point `DPI_UNIT`
+/// (`1024 == 1.0`) and the division is integer, so every host produces
+/// bit-identical coordinates for the same input; the final cast is the only
+/// floating-point step.
+pub fn logical_coord(physical: f32, scale: f32) -> f32 {
+    let fixed = fixed_scale(scale);
+    let physical_sub = (physical as f64 * DPI_UNIT as f64).round() as i128;
+    let numerator = physical_sub * DPI_UNIT as i128;
+    let logical_sub = if numerator >= 0 {
+        (numerator + fixed / 2) / fixed
+    } else {
+        -((-numerator + fixed / 2) / fixed)
+    };
+    (logical_sub as f64 / DPI_UNIT as f64) as f32
+}
+
+/// The logical viewport of a physical backing size, rounded to whole pixels.
+pub fn logical_size(physical: Size, scale: f32) -> Size {
+    Size {
+        width: logical_coord(physical.width as f32, scale).round() as u32,
+        height: logical_coord(physical.height as f32, scale).round() as u32,
+    }
 }
 
 /// X11 scroll buttons: 4 scrolls away from the user (up), 5 toward it. Any
