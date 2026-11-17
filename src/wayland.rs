@@ -31,12 +31,14 @@ use crate::wayland_wire::{
     WL_CALLBACK_DONE, WL_DISPLAY_ERROR_EVENT, WL_KEYBOARD_ENTER, WL_KEYBOARD_KEY,
     WL_KEYBOARD_KEYMAP, WL_KEYBOARD_LEAVE, WL_KEY_PRESSED, WL_OUTPUT_DONE, WL_OUTPUT_SCALE,
     WL_POINTER_AXIS, WL_POINTER_AXIS_VERTICAL, WL_POINTER_BUTTON, WL_POINTER_ENTER,
-    WL_POINTER_FRAME, WL_POINTER_LEAVE, WL_POINTER_MOTION, WL_POINTER_PRIMARY, WL_REGISTRY_GLOBAL,
+    WL_POINTER_FRAME, WL_POINTER_LEAVE, WL_POINTER_MOTION, WL_REGISTRY_GLOBAL,
     WL_SEAT_GET_KEYBOARD, WL_SEAT_GET_POINTER, WL_SHM_FORMAT_ARGB8888, WL_SURFACE_ENTER,
     WL_SURFACE_LEAVE, XDG_SURFACE_CONFIGURE, XDG_TOPLEVEL_CLOSE, XDG_TOPLEVEL_CONFIGURE,
     XDG_TOPLEVEL_SET_APP_ID, XDG_TOPLEVEL_SET_TITLE, XDG_WM_BASE_PING,
 };
-use crate::{AdapterError, FrameView, InputEvent, Lifecycle, Size, WAYLAND_DISPLAY_ENV};
+use crate::{
+    AdapterError, FrameView, InputEvent, Lifecycle, PointerState, Size, WAYLAND_DISPLAY_ENV,
+};
 
 type WlDisplayConnectFn = unsafe extern "C" fn(*const c_char) -> *mut c_void;
 type WlDisplayDisconnectFn = unsafe extern "C" fn(*mut c_void);
@@ -888,34 +890,58 @@ impl WaylandHost {
             return 0;
         }
         let mut queued = 0;
-        let pressed = !self.pointer_buttons.is_empty();
+        // wl_keyboard.modifiers is not wired yet; modifier bits stay zero.
+        // shortcut: keyboard modifiers on pointer events need the seat's
+        // modifier event; add them with the tablet/touch device paths.
+        let mut bits = 0u32;
+        for button in &self.pointer_buttons {
+            if let Some(bit) = input_map::wayland_button(*button) {
+                bits |= bit;
+            }
+        }
+        let pointer = PointerState {
+            buttons: bits,
+            ..PointerState::default()
+        };
         if let (Some((x, y)), true) = (frame.position, frame.moved) {
             self.events
-                .push_back(input_map::pointer_move(pressed, x, y));
+                .push_back(input_map::pointer_move(pointer, x, y));
             queued += 1;
         }
         for (button, down) in frame.buttons {
-            // shortcut: secondary buttons have no ABI code yet; only the
-            // primary button maps to Tap/PointerUp.
-            if button != WL_POINTER_PRIMARY {
+            let Some(bit) = input_map::wayland_button(button) else {
                 continue;
-            }
+            };
+            let state = PointerState {
+                buttons: if down { bits | bit } else { bits & !bit },
+                ..pointer
+            };
             if let Some((x, y)) = frame.position {
                 self.events.push_back(if down {
                     InputEvent::Tap {
                         x,
                         y,
                         node_id: u32::MAX,
+                        pointer: state,
                     }
                 } else {
-                    InputEvent::PointerUp { x, y }
+                    InputEvent::PointerUp {
+                        x,
+                        y,
+                        pointer: state,
+                    }
                 });
                 queued += 1;
             }
         }
         for delta in frame.axes {
             let (x, y) = frame.position.unwrap_or((0.0, 0.0));
-            self.events.push_back(InputEvent::Wheel { x, y, delta });
+            self.events.push_back(InputEvent::Wheel {
+                x,
+                y,
+                delta,
+                pointer,
+            });
             queued += 1;
         }
         queued

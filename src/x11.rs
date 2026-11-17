@@ -17,7 +17,8 @@ use crate::{
     ime::ImeStatus,
     input_map,
     x11_pixels::{checked_len, rgba_to_xpixel},
-    AdapterError, Capabilities, FrameView, InputEvent, Lifecycle, PlatformAdapter, Size,
+    AdapterError, Capabilities, FrameView, InputEvent, Lifecycle, PlatformAdapter, PointerState,
+    Size,
 };
 
 type Window = c_ulong;
@@ -261,7 +262,6 @@ const EXPOSURE_MASK: c_long = 1 << 15;
 const STRUCTURE_NOTIFY_MASK: c_long = 1 << 17;
 const FOCUS_CHANGE_MASK: c_long = 1 << 21;
 /// `Button1Mask` in an event's `state` field: the primary button is held.
-const BUTTON1_MASK: c_uint = 1 << 8;
 /// `XIMPreeditNothing | XIMStatusNothing`: the input method draws its own
 /// preedit and status windows, so the host needs no XIM callbacks.
 const XIM_NOTHING_STYLE: c_ulong = 0x0008 | 0x0400;
@@ -754,6 +754,14 @@ impl X11Host {
         result
     }
 
+    fn pointer_state(&self, buttons: u32, modifiers: u32) -> PointerState {
+        PointerState {
+            buttons,
+            modifiers,
+            ..PointerState::default()
+        }
+    }
+
     /// Consume exactly one X event. `XNextEvent` blocks until one arrives.
     pub fn pump(&mut self) -> Result<(), AdapterError> {
         if self.closed {
@@ -776,12 +784,22 @@ impl X11Host {
             BUTTON_PRESS => {
                 let button = unsafe { event.button };
                 let (x, y) = logical_xy(self.scale, button.x as f32, button.y as f32);
+                let pointer = self.pointer_state(
+                    input_map::x11_button(button.button).unwrap_or(0),
+                    input_map::x11_modifiers(button.state),
+                );
                 match input_map::x11_scroll_notch(button.button) {
-                    Some(delta) => self.events.push_back(InputEvent::Wheel { x, y, delta }),
+                    Some(delta) => self.events.push_back(InputEvent::Wheel {
+                        x,
+                        y,
+                        delta,
+                        pointer,
+                    }),
                     None => self.events.push_back(InputEvent::Tap {
                         x,
                         y,
                         node_id: u32::MAX,
+                        pointer,
                     }),
                 }
             }
@@ -790,7 +808,12 @@ impl X11Host {
                 // A scroll notch reports no release of its own in the ABI.
                 if input_map::x11_scroll_notch(button.button).is_none() {
                     let (x, y) = logical_xy(self.scale, button.x as f32, button.y as f32);
-                    self.events.push_back(InputEvent::PointerUp { x, y });
+                    let pointer = self.pointer_state(
+                        input_map::x11_motion_buttons(button.state),
+                        input_map::x11_modifiers(button.state),
+                    );
+                    self.events
+                        .push_back(InputEvent::PointerUp { x, y, pointer });
                 }
             }
             MOTION_NOTIFY => {
@@ -798,11 +821,12 @@ impl X11Host {
                 // through `state`, which is all this arm reads.
                 let motion = unsafe { event.button };
                 let (x, y) = logical_xy(self.scale, motion.x as f32, motion.y as f32);
-                self.events.push_back(input_map::pointer_move(
-                    motion.state & BUTTON1_MASK != 0,
-                    x,
-                    y,
-                ));
+                let pointer = self.pointer_state(
+                    input_map::x11_motion_buttons(motion.state as u32),
+                    input_map::x11_modifiers(motion.state as u32),
+                );
+                self.events
+                    .push_back(input_map::pointer_move(pointer, x, y));
             }
             CONFIGURE_NOTIFY => {
                 let configure = unsafe { event.configure };
@@ -1270,12 +1294,23 @@ fn dispatch_window(
         BUTTON_PRESS => {
             let button = unsafe { event.button };
             let (x, y) = logical_xy(window.scale, button.x as f32, button.y as f32);
+            let pointer = PointerState {
+                buttons: input_map::x11_button(button.button).unwrap_or(0),
+                modifiers: input_map::x11_modifiers(button.state),
+                ..PointerState::default()
+            };
             match input_map::x11_scroll_notch(button.button) {
-                Some(delta) => window.events.push_back(InputEvent::Wheel { x, y, delta }),
+                Some(delta) => window.events.push_back(InputEvent::Wheel {
+                    x,
+                    y,
+                    delta,
+                    pointer,
+                }),
                 None => window.events.push_back(InputEvent::Tap {
                     x,
                     y,
                     node_id: u32::MAX,
+                    pointer,
                 }),
             }
         }
@@ -1283,17 +1318,27 @@ fn dispatch_window(
             let button = unsafe { event.button };
             if input_map::x11_scroll_notch(button.button).is_none() {
                 let (x, y) = logical_xy(window.scale, button.x as f32, button.y as f32);
-                window.events.push_back(InputEvent::PointerUp { x, y });
+                let pointer = PointerState {
+                    buttons: input_map::x11_motion_buttons(button.state),
+                    modifiers: input_map::x11_modifiers(button.state),
+                    ..PointerState::default()
+                };
+                window
+                    .events
+                    .push_back(InputEvent::PointerUp { x, y, pointer });
             }
         }
         MOTION_NOTIFY => {
             let motion = unsafe { event.button };
             let (x, y) = logical_xy(window.scale, motion.x as f32, motion.y as f32);
-            window.events.push_back(input_map::pointer_move(
-                motion.state & BUTTON1_MASK != 0,
-                x,
-                y,
-            ));
+            let pointer = PointerState {
+                buttons: input_map::x11_motion_buttons(motion.state as u32),
+                modifiers: input_map::x11_modifiers(motion.state as u32),
+                ..PointerState::default()
+            };
+            window
+                .events
+                .push_back(input_map::pointer_move(pointer, x, y));
         }
         CONFIGURE_NOTIFY => {
             let configure = unsafe { event.configure };

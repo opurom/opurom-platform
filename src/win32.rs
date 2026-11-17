@@ -19,7 +19,7 @@ use windows_sys::Win32::Graphics::Gdi::{
     BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HDC, PAINTSTRUCT, RGBQUAD, SRCCOPY,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::System::SystemServices::MK_LBUTTON;
+
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::Ime::{
     ImmGetCompositionStringW, ImmGetContext, ImmReleaseContext,
@@ -28,14 +28,18 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW, LoadCursorW,
     PostQuitMessage, RegisterClassW, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
     CW_USEDEFAULT, IDC_ARROW, MSG, SW_SHOW, WM_CHAR, WM_DESTROY, WM_DPICHANGED, WM_IME_COMPOSITION,
-    WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_PAINT, WM_SETFOCUS, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS, WM_SIZE,
+    WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
 use crate::app_lifecycle::LifecycleTracker;
 use crate::ime::{self, ImeStatus};
 use crate::input_map;
-use crate::{AdapterError, Capabilities, FrameView, InputEvent, Lifecycle, PlatformAdapter, Size};
+use crate::{
+    AdapterError, Capabilities, FrameView, InputEvent, Lifecycle, PlatformAdapter, PointerState,
+    Size,
+};
 
 const INVALID_STATE: &str = "Win32 state mutex is poisoned";
 const WINDOW_DESTROYED: &str = "the window was destroyed";
@@ -174,6 +178,14 @@ fn logical_xy(hwnd: HWND, x: f32, y: f32) -> (f32, f32) {
         input_map::logical_coord(x, scale),
         input_map::logical_coord(y, scale),
     )
+}
+
+fn pointer_state(wparam: WPARAM) -> PointerState {
+    PointerState {
+        buttons: input_map::win32_buttons(wparam as u32),
+        modifiers: input_map::win32_modifiers(wparam as u32),
+        ..PointerState::default()
+    }
 }
 
 fn logical_pointer(hwnd: HWND, lparam: LPARAM) -> (f32, f32) {
@@ -356,19 +368,51 @@ unsafe extern "system" fn window_proc(
                     x,
                     y,
                     node_id: u32::MAX,
+                    pointer: PointerState::default(),
                 },
             );
             0
         }
         WM_LBUTTONUP => {
             let (x, y) = logical_pointer(hwnd, lparam);
-            push_event(hwnd, InputEvent::PointerUp { x, y });
+            push_event(
+                hwnd,
+                InputEvent::PointerUp {
+                    x,
+                    y,
+                    pointer: pointer_state(wparam),
+                },
+            );
+            0
+        }
+        WM_RBUTTONDOWN | WM_MBUTTONDOWN => {
+            let (x, y) = logical_pointer(hwnd, lparam);
+            push_event(
+                hwnd,
+                InputEvent::Tap {
+                    x,
+                    y,
+                    node_id: u32::MAX,
+                    pointer: pointer_state(wparam),
+                },
+            );
+            0
+        }
+        WM_RBUTTONUP | WM_MBUTTONUP => {
+            let (x, y) = logical_pointer(hwnd, lparam);
+            push_event(
+                hwnd,
+                InputEvent::PointerUp {
+                    x,
+                    y,
+                    pointer: pointer_state(wparam),
+                },
+            );
             0
         }
         WM_MOUSEMOVE => {
             let (x, y) = logical_pointer(hwnd, lparam);
-            let pressed = (wparam as u32) & MK_LBUTTON != 0;
-            push_event(hwnd, input_map::pointer_move(pressed, x, y));
+            push_event(hwnd, input_map::pointer_move(pointer_state(wparam), x, y));
             0
         }
         WM_MOUSEWHEEL => {
@@ -384,7 +428,15 @@ unsafe extern "system" fn window_proc(
             };
             if delta != 0.0 && ScreenToClient(hwnd, &mut point) != 0 {
                 let (x, y) = logical_xy(hwnd, point.x as f32, point.y as f32);
-                push_event(hwnd, InputEvent::Wheel { x, y, delta });
+                push_event(
+                    hwnd,
+                    InputEvent::Wheel {
+                        x,
+                        y,
+                        delta,
+                        pointer: pointer_state(wparam),
+                    },
+                );
             }
             0
         }

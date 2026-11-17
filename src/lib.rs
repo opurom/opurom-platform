@@ -152,17 +152,69 @@ pub struct FrameView<'a> {
 /// and re-raster at the new backing size, while the next pointer event
 /// already uses the new scale. Hosts with no scale event emit `Scale{1.0}`
 /// once at window creation.
+/// The device and pressed-button state carried by every pointer event.
+/// Buttons use the stable bits in [`input_map`]; modifiers use that module's
+/// modifier bits. Desktop hosts currently report `Mouse`; touch, pen and
+/// trackpad producers are typed slots for their native signal paths.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PointerState {
+    pub device: PointerDevice,
+    pub buttons: u32,
+    pub modifiers: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PointerDevice {
+    #[default]
+    Mouse,
+    Touch,
+    Trackpad,
+    Pen,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum InputEvent {
-    Tap { x: f32, y: f32, node_id: u32 },
-    PointerMove { x: f32, y: f32 },
-    PointerDrag { x: f32, y: f32 },
-    PointerUp { x: f32, y: f32 },
-    Wheel { x: f32, y: f32, delta: f32 },
-    Input { node_id: u32, text: String },
-    Key { code: u32, pressed: bool },
-    Resize { size: Size },
-    Scale { scale: f32 },
+    Tap {
+        x: f32,
+        y: f32,
+        node_id: u32,
+        pointer: PointerState,
+    },
+    PointerMove {
+        x: f32,
+        y: f32,
+        pointer: PointerState,
+    },
+    PointerDrag {
+        x: f32,
+        y: f32,
+        pointer: PointerState,
+    },
+    PointerUp {
+        x: f32,
+        y: f32,
+        pointer: PointerState,
+    },
+    Wheel {
+        x: f32,
+        y: f32,
+        delta: f32,
+        pointer: PointerState,
+    },
+    Input {
+        node_id: u32,
+        text: String,
+    },
+    Key {
+        code: u32,
+        pressed: bool,
+    },
+    Resize {
+        size: Size,
+    },
+    Scale {
+        scale: f32,
+    },
     Lifecycle(Lifecycle),
 }
 

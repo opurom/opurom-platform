@@ -5,14 +5,118 @@
 
 use crate::display_geometry::DPI_UNIT;
 use crate::wayland_wire::WireEvent;
-use crate::{InputEvent, Size};
+use crate::{InputEvent, PointerState, Size};
 
-/// A pointer moved: a button held means a drag, otherwise a free move.
-pub fn pointer_move(pressed: bool, x: f32, y: f32) -> InputEvent {
-    if pressed {
-        InputEvent::PointerDrag { x, y }
+/// Stable button bits carried by every pointer event.
+pub const BUTTON_PRIMARY: u32 = 1 << 0;
+pub const BUTTON_SECONDARY: u32 = 1 << 1;
+pub const BUTTON_MIDDLE: u32 = 1 << 2;
+pub const BUTTON_BACK: u32 = 1 << 3;
+pub const BUTTON_FORWARD: u32 = 1 << 4;
+
+/// Stable modifier bits carried by every pointer event.
+pub const MOD_SHIFT: u32 = 1 << 0;
+pub const MOD_CONTROL: u32 = 1 << 1;
+pub const MOD_ALT: u32 = 1 << 2;
+pub const MOD_META: u32 = 1 << 3;
+
+/// A pointer moved: any button held means a drag, otherwise a free move.
+pub fn pointer_move(pointer: PointerState, x: f32, y: f32) -> InputEvent {
+    if pointer.buttons != 0 {
+        InputEvent::PointerDrag { x, y, pointer }
     } else {
-        InputEvent::PointerMove { x, y }
+        InputEvent::PointerMove { x, y, pointer }
+    }
+}
+
+/// Win32 `wParam` button flags (windows-sys `MK_LBUTTON`/`MK_RBUTTON`/
+/// `MK_MBUTTON`) into the ABI's stable button bits.
+pub fn win32_buttons(flags: u32) -> u32 {
+    let mut bits = 0;
+    if flags & 0x0001 != 0 {
+        bits |= BUTTON_PRIMARY;
+    }
+    if flags & 0x0002 != 0 {
+        bits |= BUTTON_SECONDARY;
+    }
+    if flags & 0x0010 != 0 {
+        bits |= BUTTON_MIDDLE;
+    }
+    bits
+}
+
+/// Win32 `wParam` modifier flags (`MK_SHIFT`/`MK_CONTROL`/`MK_ALT`).
+pub fn win32_modifiers(flags: u32) -> u32 {
+    let mut bits = 0;
+    if flags & 0x0004 != 0 {
+        bits |= MOD_SHIFT;
+    }
+    if flags & 0x0008 != 0 {
+        bits |= MOD_CONTROL;
+    }
+    if flags & 0x0020 != 0 {
+        bits |= MOD_ALT;
+    }
+    bits
+}
+
+/// X11 button numbers (X protocol Button1..Button9) into stable button bits.
+pub fn x11_button(button: u32) -> Option<u32> {
+    match button {
+        1 => Some(BUTTON_PRIMARY),
+        2 => Some(BUTTON_MIDDLE),
+        3 => Some(BUTTON_SECONDARY),
+        8 => Some(BUTTON_BACK),
+        9 => Some(BUTTON_FORWARD),
+        _ => None,
+    }
+}
+
+/// X11 motion `state` button masks (`Button1Mask` 1<<8 ... `Button3Mask`
+/// 1<<10) into the stable button bits.
+pub fn x11_motion_buttons(state: u32) -> u32 {
+    let mut bits = 0;
+    if state & (1 << 8) != 0 {
+        bits |= BUTTON_PRIMARY;
+    }
+    if state & (1 << 9) != 0 {
+        bits |= BUTTON_MIDDLE;
+    }
+    if state & (1 << 10) != 0 {
+        bits |= BUTTON_SECONDARY;
+    }
+    bits
+}
+
+/// X11 `state` modifier mask (`X.h`: ShiftMask=1, ControlMask=4,
+/// Mod1Mask=8, Mod4Mask=64) into stable modifier bits.
+pub fn x11_modifiers(state: u32) -> u32 {
+    let mut bits = 0;
+    if state & (1 << 0) != 0 {
+        bits |= MOD_SHIFT;
+    }
+    if state & (1 << 2) != 0 {
+        bits |= MOD_CONTROL;
+    }
+    if state & (1 << 3) != 0 {
+        bits |= MOD_ALT;
+    }
+    if state & (1 << 6) != 0 {
+        bits |= MOD_META;
+    }
+    bits
+}
+
+/// Wayland `wl_pointer.button` carries Linux `input-event-codes.h` values
+/// (`BTN_LEFT` 0x110 ... `BTN_BACK` 0x116).
+pub fn wayland_button(button: u32) -> Option<u32> {
+    match button {
+        0x110 => Some(BUTTON_PRIMARY),
+        0x111 => Some(BUTTON_SECONDARY),
+        0x112 => Some(BUTTON_MIDDLE),
+        0x113 | 0x116 => Some(BUTTON_BACK),
+        0x114 | 0x115 => Some(BUTTON_FORWARD),
+        _ => None,
     }
 }
 
@@ -88,6 +192,10 @@ pub fn wire_input(event: WireEvent, pressed: bool) -> (Option<InputEvent>, bool)
                 x: x as f32,
                 y: y as f32,
                 node_id: u32::MAX,
+                pointer: PointerState {
+                    buttons: BUTTON_PRIMARY,
+                    ..PointerState::default()
+                },
             }),
             true,
         ),
@@ -95,10 +203,17 @@ pub fn wire_input(event: WireEvent, pressed: bool) -> (Option<InputEvent>, bool)
             Some(InputEvent::PointerUp {
                 x: x as f32,
                 y: y as f32,
+                pointer: PointerState::default(),
             }),
             false,
         ),
-        WireEvent::Move { x, y } => (Some(pointer_move(pressed, x as f32, y as f32)), pressed),
+        WireEvent::Move { x, y } => {
+            let pointer = PointerState {
+                buttons: if pressed { BUTTON_PRIMARY } else { 0 },
+                ..PointerState::default()
+            };
+            (Some(pointer_move(pointer, x as f32, y as f32)), pressed)
+        }
         WireEvent::Focus { .. }
         | WireEvent::Geometry(_)
         | WireEvent::LayoutPatch(_)

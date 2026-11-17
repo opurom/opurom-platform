@@ -1,8 +1,8 @@
 use opurom_platform::{
     all_platforms, focus_order, host_platforms, known_platforms, parse_a11y_json, platforms_with,
     registry, spec_by_name, AdapterError, Capabilities, Capability, FocusOrder, FrameView,
-    Headless, InputEvent, Lifecycle, PlatformAdapter, Size, Status, Terminal, WindowSet,
-    DEFAULT_A11Y_TREE, HEADLESS_SPEC, TERMINAL_SPEC,
+    Headless, InputEvent, Lifecycle, PlatformAdapter, PointerState, Size, Status, Terminal,
+    WindowSet, DEFAULT_A11Y_TREE, HEADLESS_SPEC, TERMINAL_SPEC,
 };
 
 /// The 14 target names required by the framework implementation.
@@ -145,6 +145,7 @@ fn headless_events_drain_fifo_including_resize() {
         x: 1.0,
         y: 2.0,
         node_id: 3,
+        pointer: PointerState::default(),
     });
     host.push_event(InputEvent::Input {
         node_id: 3,
@@ -172,7 +173,8 @@ fn headless_events_drain_fifo_including_resize() {
         Some(InputEvent::Tap {
             x: 1.0,
             y: 2.0,
-            node_id: 3
+            node_id: 3,
+            pointer: PointerState::default(),
         })
     );
     assert_eq!(
@@ -503,6 +505,7 @@ fn terminal_key_input_round_trips_fifo() {
         x: 1.0,
         y: 2.0,
         node_id: u32::MAX,
+        pointer: PointerState::default(),
     });
     assert_eq!(
         host.poll_event(),
@@ -523,7 +526,8 @@ fn terminal_key_input_round_trips_fifo() {
         Some(InputEvent::Tap {
             x: 1.0,
             y: 2.0,
-            node_id: u32::MAX
+            node_id: u32::MAX,
+            pointer: PointerState::default(),
         })
     );
     assert_eq!(host.poll_event(), None, "queue fully drained");
@@ -559,6 +563,7 @@ fn terminal_draining_an_external_resize_moves_the_viewport() {
         x: 1.0,
         y: 2.0,
         node_id: u32::MAX,
+        pointer: PointerState::default(),
     });
     host.push_event(InputEvent::Resize { size: size(40, 12) });
 
@@ -572,7 +577,8 @@ fn terminal_draining_an_external_resize_moves_the_viewport() {
         Some(InputEvent::Tap {
             x: 1.0,
             y: 2.0,
-            node_id: u32::MAX
+            node_id: u32::MAX,
+            pointer: PointerState::default(),
         })
     );
     assert_eq!(
