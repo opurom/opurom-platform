@@ -42,10 +42,23 @@ pub fn win32_buttons(flags: u32) -> u32 {
     if flags & 0x0010 != 0 {
         bits |= BUTTON_MIDDLE;
     }
+    if flags & 0x0020 != 0 {
+        bits |= BUTTON_BACK;
+    }
+    if flags & 0x0040 != 0 {
+        bits |= BUTTON_FORWARD;
+    }
     bits
 }
 
-/// Win32 `wParam` modifier flags (`MK_SHIFT`/`MK_CONTROL`/`MK_ALT`).
+/// Win32 `wParam` modifier flags. The `MK_*` masks are
+/// `MK_LBUTTON` 0x01, `MK_RBUTTON` 0x02, `MK_SHIFT` 0x04, `MK_CONTROL` 0x08,
+/// `MK_MBUTTON` 0x10, `MK_XBUTTON1` 0x20 and `MK_XBUTTON2` 0x40
+/// (windows-sys `Win32_System_SystemServices`). Alt is not a `wParam` bit:
+/// it arrives through `GetKeyState(VK_MENU)`, so the Alt bit stays zero here.
+///
+/// shortcut: the Alt and Meta bits need a `GetKeyState` read at event time;
+/// add them with the key-event path instead of guessing a mask.
 pub fn win32_modifiers(flags: u32) -> u32 {
     let mut bits = 0;
     if flags & 0x0004 != 0 {
@@ -53,9 +66,6 @@ pub fn win32_modifiers(flags: u32) -> u32 {
     }
     if flags & 0x0008 != 0 {
         bits |= MOD_CONTROL;
-    }
-    if flags & 0x0020 != 0 {
-        bits |= MOD_ALT;
     }
     bits
 }
@@ -178,15 +188,21 @@ pub fn logical_size(physical: Size, scale: f32) -> Size {
     }
 }
 
-/// X11 scroll buttons: 4 scrolls away from the user (up), 5 toward it. Any
-/// other button number is not a wheel.
-///
-/// shortcut: horizontal wheel buttons 6/7 stay unmapped until the ABI grows
-/// a horizontal axis.
+/// X11 scroll buttons: 4 scrolls away from the user (up), 5 toward it, 6
+/// scrolls right and 7 left. Any other button number is not a wheel.
 pub fn x11_scroll_notch(button: u32) -> Option<f32> {
     match button {
         4 => Some(1.0),
         5 => Some(-1.0),
+        _ => None,
+    }
+}
+
+/// X11 horizontal scroll buttons: 6 scrolls right, 7 left.
+pub fn x11_scroll_notch_x(button: u32) -> Option<f32> {
+    match button {
+        6 => Some(1.0),
+        7 => Some(-1.0),
         _ => None,
     }
 }
@@ -242,6 +258,12 @@ pub fn wire_input(event: WireEvent, pressed: bool) -> (Option<InputEvent>, bool)
 /// flip the sign into the ABI's "positive scrolls up" notch convention.
 pub fn wayland_wheel_delta(raw_fixed: i32) -> f32 {
     -(raw_fixed as f32 / 256.0)
+}
+
+/// Wayland's horizontal scroll value: positive means scrolling right, which is
+/// already the ABI's horizontal convention.
+pub fn wayland_wheel_delta_x(raw_fixed: i32) -> f32 {
+    raw_fixed as f32 / 256.0
 }
 
 /// A device DPI value against the ABI's 96 DPI baseline: 96 reports 1.0,

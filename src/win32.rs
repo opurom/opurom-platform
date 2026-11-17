@@ -32,8 +32,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     PostQuitMessage, RegisterClassW, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
     CW_USEDEFAULT, IDC_ARROW, MSG, SW_SHOW, WM_CHAR, WM_DESTROY, WM_DPICHANGED, WM_IME_COMPOSITION,
     WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS, WM_SIZE,
-    WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_SETFOCUS, WM_SIZE, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
 use crate::app_lifecycle::LifecycleTracker;
@@ -406,6 +406,47 @@ unsafe extern "system" fn window_proc(
             );
             0
         }
+        WM_XBUTTONDOWN => {
+            let (x, y) = logical_pointer(hwnd, lparam);
+            let button = ((wparam >> 16) & 0xffff) as u16;
+            push_event(
+                hwnd,
+                InputEvent::Tap {
+                    x,
+                    y,
+                    node_id: u32::MAX,
+                    pointer: PointerState {
+                        buttons: if button == 1 {
+                            input_map::BUTTON_BACK
+                        } else {
+                            input_map::BUTTON_FORWARD
+                        },
+                        ..pointer_state(wparam)
+                    },
+                },
+            );
+            0
+        }
+        WM_XBUTTONUP => {
+            let (x, y) = logical_pointer(hwnd, lparam);
+            let button = ((wparam >> 16) & 0xffff) as u16;
+            push_event(
+                hwnd,
+                InputEvent::PointerUp {
+                    x,
+                    y,
+                    pointer: PointerState {
+                        buttons: if button == 1 {
+                            input_map::BUTTON_BACK
+                        } else {
+                            input_map::BUTTON_FORWARD
+                        },
+                        ..pointer_state(wparam)
+                    },
+                },
+            );
+            0
+        }
         WM_RBUTTONDOWN | WM_MBUTTONDOWN => {
             let (x, y) = logical_pointer(hwnd, lparam);
             push_event(
@@ -501,6 +542,31 @@ unsafe extern "system" fn window_proc(
                         x,
                         y,
                         delta,
+                        delta_x: 0.0,
+                        pointer: pointer_state(wparam),
+                    },
+                );
+            }
+            0
+        }
+        WM_MOUSEHWHEEL => {
+            // Same high-word 120ths-of-a-notch encoding as WM_MOUSEWHEEL, on
+            // the horizontal axis. Positive scrolls right.
+            let raw = ((wparam >> 16) & 0xffff) as u16 as i16;
+            let delta_x = input_map::wheel_delta(raw);
+            let mut point = POINT {
+                x: (lparam as u32 & 0xffff) as u16 as i16 as i32,
+                y: ((lparam as u32 >> 16) & 0xffff) as u16 as i16 as i32,
+            };
+            if delta_x != 0.0 && ScreenToClient(hwnd, &mut point) != 0 {
+                let (x, y) = logical_xy(hwnd, point.x as f32, point.y as f32);
+                push_event(
+                    hwnd,
+                    InputEvent::Wheel {
+                        x,
+                        y,
+                        delta: 0.0,
+                        delta_x,
                         pointer: pointer_state(wparam),
                     },
                 );

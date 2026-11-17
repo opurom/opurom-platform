@@ -209,10 +209,15 @@ pub enum InputEvent {
         y: f32,
         pointer: PointerState,
     },
+    /// One scroll notch at the pointer. `delta` is the vertical axis, positive
+    /// away from the user (scrolled up); `delta_x` is the horizontal axis,
+    /// positive to the right. Both are in notch units, so a trackpad's pixel
+    /// deltas stay quantized the same way a wheel's are.
     Wheel {
         x: f32,
         y: f32,
         delta: f32,
+        delta_x: f32,
         pointer: PointerState,
     },
     Input {

@@ -48,10 +48,12 @@ pub const WL_COMPOSITOR_CREATE_SURFACE: u16 = 0;
 pub const WL_SURFACE_ENTER: u16 = 0;
 pub const WL_SURFACE_LEAVE: u16 = 1;
 // wl_surface requests: destroy, attach, damage, frame, set_opaque_region,
-// set_input_region, commit.
+// set_input_region, commit, then the version additions set_buffer_transform (2),
+// set_buffer_scale (3), damage_buffer (4) and offset (5).
 pub const WL_SURFACE_ATTACH: u16 = 1;
 pub const WL_SURFACE_DAMAGE: u16 = 2;
 pub const WL_SURFACE_COMMIT: u16 = 6;
+pub const WL_SURFACE_SET_BUFFER_SCALE: u16 = 8;
 // wl_buffer events: release.
 pub const WL_BUFFER_RELEASE: u16 = 0;
 // xdg_wm_base requests: destroy, create_positioner, get_xdg_surface, pong;
@@ -87,8 +89,9 @@ pub const WL_KEYBOARD_KEYMAP: u16 = 0;
 pub const WL_KEYBOARD_ENTER: u16 = 1;
 pub const WL_KEYBOARD_LEAVE: u16 = 2;
 pub const WL_KEYBOARD_KEY: u16 = 3;
-// wl_pointer.axis enum: 0 is vertical, 1 horizontal; state enums: 1 is down.
+// wl_pointer.axis enum: 0 is vertical_scroll, 1 horizontal_scroll.
 pub const WL_POINTER_AXIS_VERTICAL: u32 = 0;
+pub const WL_POINTER_AXIS_HORIZONTAL: u32 = 1;
 pub const WL_BUTTON_PRESSED: u32 = 1;
 pub const WL_KEY_PRESSED: u32 = 1;
 pub const WL_POINTER_PRIMARY: u32 = 0x110;
@@ -1124,6 +1127,21 @@ pub fn decode_output_scale(body: &[u8]) -> Result<u32, AdapterError> {
     Ok(u32::from_ne_bytes([body[0], body[1], body[2], body[3]]))
 }
 
+/// `wl_surface.set_buffer_scale(int scale)`: the backing scale the client
+/// renders at. The compositor expects the buffer to be `scale` times the
+/// surface size.
+pub fn encode_surface_set_buffer_scale(
+    surface_id: u32,
+    scale: i32,
+) -> Result<Vec<u8>, AdapterError> {
+    if scale <= 0 {
+        return Err(AdapterError::Backend(BAD_STRIDE));
+    }
+    let mut body = Vec::new();
+    body.extend_from_slice(&scale.to_ne_bytes());
+    encode_message(surface_id, WL_SURFACE_SET_BUFFER_SCALE, &body)
+}
+
 /// `wl_surface.enter`/`leave`: the single `wl_output` object id.
 pub fn decode_surface_output(body: &[u8]) -> Result<u32, AdapterError> {
     if body.len() != 4 {
@@ -1273,6 +1291,24 @@ mod tests {
     }
 
     #[test]
+    fn buffer_scale_request_matches_the_wire_bytes() {
+        let bytes = encode_surface_set_buffer_scale(7, 2).expect("scale");
+        // object id, then size|opcode, then the int scale, padded to a word.
+        assert_eq!(bytes.len(), 12);
+        assert_eq!(&bytes[0..4], &7u32.to_ne_bytes());
+        // The header packs size in the upper 16 bits and the opcode below it.
+        let size_and_opcode = u32::from_ne_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+        assert_eq!(size_and_opcode >> 16, 12);
+        assert_eq!(
+            size_and_opcode & 0xffff,
+            u32::from(WL_SURFACE_SET_BUFFER_SCALE)
+        );
+        assert_eq!(&bytes[8..12], &2i32.to_ne_bytes());
+        assert!(encode_surface_set_buffer_scale(7, 0).is_err());
+        assert!(encode_surface_set_buffer_scale(7, -1).is_err());
+    }
+
+    #[test]
     fn surface_output_decodes_enter_and_leave_words() {
         assert_eq!(WL_SURFACE_ENTER, 0);
         assert_eq!(WL_SURFACE_LEAVE, 1);
@@ -1354,6 +1390,15 @@ mod tests {
         assert_eq!(decode_pointer_axis(&body).unwrap(), (0, -256));
         assert_eq!(fixed_to_f32(256), 1.0);
         assert_eq!(fixed_to_f32(-128), -0.5);
+
+        let mut body = Vec::new();
+        body.extend_from_slice(&2u32.to_ne_bytes());
+        body.extend_from_slice(&WL_POINTER_AXIS_HORIZONTAL.to_ne_bytes());
+        body.extend_from_slice(&512i32.to_ne_bytes());
+        assert_eq!(
+            decode_pointer_axis(&body).unwrap(),
+            (WL_POINTER_AXIS_HORIZONTAL, 512)
+        );
     }
 
     fn keyboard_key_body() -> Vec<u8> {

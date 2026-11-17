@@ -25,12 +25,13 @@ use crate::wayland_wire::{
     decode_string, decode_surface_output, decode_toplevel_configure, decode_xdg_configure_serial,
     encode_ack_configure, encode_create_buffer, encode_create_pool, encode_create_surface,
     encode_pong, encode_registry_bind, encode_seat_device, encode_surface_attach,
-    encode_surface_commit, encode_surface_damage, encode_toplevel_string, encode_xdg_get_surface,
-    encode_xdg_get_toplevel, fixed_to_f32, next_event, recvmsg_with_fds, send_with_fd,
-    setup_handshake, ObjectIds, DISPLAY_ID, EVENT_OBJECT_ID, WL_BUFFER_RELEASE, WL_BUTTON_PRESSED,
-    WL_CALLBACK_DONE, WL_DISPLAY_ERROR_EVENT, WL_KEYBOARD_ENTER, WL_KEYBOARD_KEY,
-    WL_KEYBOARD_KEYMAP, WL_KEYBOARD_LEAVE, WL_KEY_PRESSED, WL_OUTPUT_DONE, WL_OUTPUT_SCALE,
-    WL_POINTER_AXIS, WL_POINTER_AXIS_VERTICAL, WL_POINTER_BUTTON, WL_POINTER_ENTER,
+    encode_surface_commit, encode_surface_damage, encode_surface_set_buffer_scale,
+    encode_toplevel_string, encode_xdg_get_surface, encode_xdg_get_toplevel, fixed_to_f32,
+    next_event, recvmsg_with_fds, send_with_fd, setup_handshake, ObjectIds, DISPLAY_ID,
+    EVENT_OBJECT_ID, WL_BUFFER_RELEASE, WL_BUTTON_PRESSED, WL_CALLBACK_DONE,
+    WL_DISPLAY_ERROR_EVENT, WL_KEYBOARD_ENTER, WL_KEYBOARD_KEY, WL_KEYBOARD_KEYMAP,
+    WL_KEYBOARD_LEAVE, WL_KEY_PRESSED, WL_OUTPUT_DONE, WL_OUTPUT_SCALE, WL_POINTER_AXIS,
+    WL_POINTER_AXIS_HORIZONTAL, WL_POINTER_AXIS_VERTICAL, WL_POINTER_BUTTON, WL_POINTER_ENTER,
     WL_POINTER_FRAME, WL_POINTER_LEAVE, WL_POINTER_MOTION, WL_REGISTRY_GLOBAL,
     WL_SEAT_GET_KEYBOARD, WL_SEAT_GET_POINTER, WL_SHM_FORMAT_ARGB8888, WL_SURFACE_ENTER,
     WL_SURFACE_LEAVE, XDG_SURFACE_CONFIGURE, XDG_TOPLEVEL_CLOSE, XDG_TOPLEVEL_CONFIGURE,
@@ -174,7 +175,7 @@ struct PointerFrame {
     position: Option<(f32, f32)>,
     moved: bool,
     buttons: Vec<(u32, bool)>,
-    axes: Vec<f32>,
+    axes: Vec<(f32, f32)>,
 }
 
 impl PointerFrame {
@@ -201,7 +202,12 @@ struct WaylandWindow {
     map: *mut u8,
     map_len: usize,
     stride: usize,
+    /// Logical window size: the xdg configure hint in window-geometry units.
     size: Size,
+    /// Physical backing size: `size * scale`, the shm buffer size.
+    backing_size: Size,
+    /// Backing scale the compositor is told through `set_buffer_scale`.
+    buffer_scale: i32,
 }
 
 /// What the compositor answered during the setup handshake.
@@ -254,6 +260,8 @@ pub struct WaylandHost {
     /// The last configure serial awaiting `ack_configure`, and the size the
     /// compositor configured (zero means "client decides").
     configure_serial: Option<u32>,
+    /// The last serial already acknowledged to the compositor.
+    configure_acked: u32,
     configure_size: Option<Size>,
     window: Option<WaylandWindow>,
     /// Seat capabilities bitmask, once announced (pointer=1, keyboard=2).
@@ -327,6 +335,7 @@ impl WaylandHost {
             wm_base_global: None,
             server_ids: ServerIds::default(),
             configure_serial: None,
+            configure_acked: 0,
             configure_size: None,
             window: None,
             seat_capabilities: None,
@@ -510,11 +519,19 @@ impl WaylandHost {
                     }
                     WL_POINTER_AXIS => {
                         let (axis, value) = decode_pointer_axis(body)?;
-                        if self.pointer_frame.surface != 0 && axis == WL_POINTER_AXIS_VERTICAL {
-                            // Horizontal scroll has no ABI axis yet.
-                            self.pointer_frame
-                                .axes
-                                .push(input_map::wayland_wheel_delta(value));
+                        if self.pointer_frame.surface != 0 {
+                            let wheel = match axis {
+                                WL_POINTER_AXIS_VERTICAL => {
+                                    Some((input_map::wayland_wheel_delta(value), 0.0))
+                                }
+                                WL_POINTER_AXIS_HORIZONTAL => {
+                                    Some((0.0, input_map::wayland_wheel_delta_x(value)))
+                                }
+                                _ => None,
+                            };
+                            if let Some(wheel) = wheel {
+                                self.pointer_frame.axes.push(wheel);
+                            }
                         }
                     }
                     WL_POINTER_FRAME => {
@@ -608,6 +625,7 @@ impl WaylandHost {
             {
                 if header.opcode == XDG_SURFACE_CONFIGURE {
                     self.configure_serial = Some(decode_xdg_configure_serial(body)?);
+                    queued += self.apply_configure()?;
                 }
             } else if header.object_id == self.server_ids.toplevel && self.server_ids.toplevel != 0
             {
@@ -630,6 +648,7 @@ impl WaylandHost {
                                 width: width as u32,
                                 height: height as u32,
                             });
+                            queued += self.apply_configure()?;
                         }
                     }
                     XDG_TOPLEVEL_CLOSE => {
@@ -956,12 +975,13 @@ impl WaylandHost {
                 queued += 1;
             }
         }
-        for delta in frame.axes {
+        for (delta, delta_x) in frame.axes {
             let (x, y) = frame.position.unwrap_or((0.0, 0.0));
             self.events.push_back(InputEvent::Wheel {
                 x,
                 y,
                 delta,
+                delta_x,
                 pointer,
             });
             queued += 1;
@@ -1060,8 +1080,23 @@ impl WaylandHost {
             self.pump_input()?;
         }
         let serial = self.configure_serial.take().expect("checked above");
+        self.configure_acked = serial;
         self.write_all(&encode_ack_configure(ids.xdg_surface, serial)?)?;
-        let size = self.configure_size.unwrap_or(size);
+        // Bind outputs before sizing the backing: the first scale read must
+        // see the active output's factor, not the 1.0 fallback. This pumps
+        // input, so it stays after the configure-serial wait above.
+        self.scale()?;
+        // xdg_toplevel.configure carries the size in window-geometry units, so
+        // it is the logical size; the backing buffer is that size times the
+        // output scale (xdg-shell 1.42 `xdg_toplevel.configure`).
+        let logical = self.configure_size.unwrap_or(size);
+        checked_window_size(logical)?;
+        let scale = self.output_scales.current();
+        let buffer_scale = scale.round().max(1.0) as i32;
+        let size = Size {
+            width: logical.width.saturating_mul(buffer_scale as u32),
+            height: logical.height.saturating_mul(buffer_scale as u32),
+        };
         checked_window_size(size)?;
         let stride = (size.width as usize)
             .checked_mul(4)
@@ -1099,6 +1134,9 @@ impl WaylandHost {
             WL_SHM_FORMAT_ARGB8888,
         )?);
         self.write_all(&buffers)?;
+        // Tell the compositor the backing scale so it does not resample the
+        // buffer; the shm buffers are already `logical * scale` pixels.
+        self.write_all(&encode_surface_set_buffer_scale(ids.surface, buffer_scale)?)?;
         self.window = Some(WaylandWindow {
             surface_id: ids.surface,
             xdg_surface_id: ids.xdg_surface,
@@ -1110,11 +1148,121 @@ impl WaylandHost {
             map,
             map_len,
             stride,
-            size,
+            size: logical,
+            backing_size: size,
+            buffer_scale,
         });
-        self.scale()?;
-        self.events.push_back(InputEvent::Resize {
-            size: input_map::logical_size(size, self.output_scales.current()),
+        self.events.push_back(InputEvent::Resize { size: logical });
+        Ok(())
+    }
+
+    /// Acknowledge a configure sequence and rebuild the backing when the
+    /// compositor asked for a new geometry. xdg-shell requires every
+    /// `xdg_surface.configure` to be acknowledged before the next commit, and
+    /// the toplevel configure carries the size in window-geometry units.
+    fn apply_configure(&mut self) -> Result<usize, AdapterError> {
+        // During open_window the wait loop owns the serial; acking it here
+        // would consume it and time the window out.
+        if self.window.is_none() {
+            return Ok(0);
+        }
+        let mut queued = 0;
+        if let Some(serial) = self.configure_serial.take() {
+            if serial != self.configure_acked {
+                self.configure_acked = serial;
+                self.write_all(&encode_ack_configure(self.server_ids.xdg_surface, serial)?)?;
+            }
+        }
+        let Some(logical) = self.configure_size else {
+            return Ok(queued);
+        };
+        let Some(window) = self.window.as_ref() else {
+            return Ok(queued);
+        };
+        if window.size == logical {
+            return Ok(queued);
+        }
+        self.rebuild_backing(logical)?;
+        self.events.push_back(InputEvent::Resize { size: logical });
+        queued += 1;
+        Ok(queued)
+    }
+
+    /// Recreate the shm pool and buffers at a new logical size.
+    fn rebuild_backing(&mut self, logical: Size) -> Result<(), AdapterError> {
+        checked_window_size(logical)?;
+        let scale = self.output_scales.current();
+        let buffer_scale = scale.round().max(1.0) as i32;
+        let backing = Size {
+            width: logical.width.saturating_mul(buffer_scale as u32),
+            height: logical.height.saturating_mul(buffer_scale as u32),
+        };
+        checked_window_size(backing)?;
+        let stride = (backing.width as usize)
+            .checked_mul(4)
+            .filter(|stride| *stride <= i32::MAX as usize)
+            .ok_or(AdapterError::InvalidFrame)?;
+        let half = stride
+            .checked_mul(backing.height as usize)
+            .ok_or(AdapterError::InvalidFrame)?;
+        let map_len = half
+            .checked_mul(2)
+            .filter(|len| *len <= i32::MAX as usize)
+            .ok_or(AdapterError::InvalidFrame)?;
+
+        let old = self
+            .window
+            .take()
+            .ok_or(AdapterError::Backend(WAYLAND_NO_WINDOW))?;
+        let mut destroy = Vec::new();
+        for id in old.buffer_ids {
+            destroy.push(crate::wayland_wire::encode_message(id, 0, &[]));
+        }
+        destroy.push(crate::wayland_wire::encode_message(old.pool_id, 0, &[]));
+        for message in destroy.into_iter().flatten() {
+            let _ = self.write_all(&message);
+        }
+        unsafe {
+            libc::munmap(old.map.cast::<c_void>(), old.map_len);
+            libc::close(old.fd);
+        }
+
+        let pool_id = self.ids.allocate()?;
+        let buffer_ids = [self.ids.allocate()?, self.ids.allocate()?];
+        let (pool_fd, map) = anonymous_pool(map_len)?;
+        let pool_bytes = encode_create_pool(self.server_ids.shm, pool_id, self.fd, map_len as i32)?;
+        send_with_fd(self.fd, &pool_bytes, pool_fd)?;
+        let mut buffers = Vec::new();
+        for (index, id) in buffer_ids.into_iter().enumerate() {
+            buffers.extend(encode_create_buffer(
+                pool_id,
+                id,
+                (index * half) as i32,
+                backing.width as i32,
+                backing.height as i32,
+                stride as i32,
+                WL_SHM_FORMAT_ARGB8888,
+            )?);
+        }
+        self.write_all(&buffers)?;
+        self.write_all(&encode_surface_set_buffer_scale(
+            old.surface_id,
+            buffer_scale,
+        )?)?;
+        self.window = Some(WaylandWindow {
+            surface_id: old.surface_id,
+            xdg_surface_id: old.xdg_surface_id,
+            toplevel_id: old.toplevel_id,
+            pool_id,
+            buffer_ids,
+            released: [true, true],
+            fd: pool_fd,
+            map,
+            map_len,
+            stride,
+            size: logical,
+            backing_size: backing,
+            buffer_scale,
         });
         Ok(())
     }
@@ -1123,10 +1271,7 @@ impl WaylandHost {
     /// physical configuration, so the consumer relayouts and re-rasters.
     fn emit_backing_change(&mut self, scale: f32) -> usize {
         self.events.push_back(InputEvent::Scale { scale });
-        let logical = self
-            .window
-            .as_ref()
-            .map(|window| input_map::logical_size(window.size, scale));
+        let logical = self.window.as_ref().map(|window| window.size);
         if let Some(size) = logical {
             self.events.push_back(InputEvent::Resize { size });
             2
@@ -1135,17 +1280,19 @@ impl WaylandHost {
         }
     }
 
-    /// The configured backing size of the open window, in physical pixels.
+    /// The configured logical size of the open window.
     pub fn window_size(&self) -> Option<Size> {
         self.window.as_ref().map(|window| window.size)
     }
 
-    /// The same window in logical layout pixels.
-    pub fn logical_window_size(&self) -> Option<Size> {
-        let scale = self.output_scales.current();
-        self.window
-            .as_ref()
-            .map(|window| input_map::logical_size(window.size, scale))
+    /// The physical backing size the shm buffers use.
+    pub fn backing_size(&self) -> Option<Size> {
+        self.window.as_ref().map(|window| window.backing_size)
+    }
+
+    /// The backing scale told to the compositor through `set_buffer_scale`.
+    pub fn buffer_scale(&self) -> Option<i32> {
+        self.window.as_ref().map(|window| window.buffer_scale)
     }
 
     /// Copy one ABGR/RGBA frame into a released shm buffer and commit it.
@@ -1156,7 +1303,7 @@ impl WaylandHost {
             .window
             .as_ref()
             .ok_or(AdapterError::Backend(WAYLAND_NO_WINDOW))?
-            .size;
+            .backing_size;
         checked_window_size(size)?;
         if frame.width != size.width || frame.height != size.height {
             return Err(AdapterError::InvalidFrame);

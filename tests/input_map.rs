@@ -4,9 +4,10 @@
 
 use opurom_platform::input_map::{
     dpi_from_millimeters, dpi_scale, hover_events, logical_coord, logical_size, pointer_move,
-    wayland_button, wayland_wheel_delta, wheel_delta, win32_buttons, win32_modifiers, wire_input,
-    x11_button, x11_modifiers, x11_motion_buttons, x11_scroll_notch, BUTTON_BACK, BUTTON_FORWARD,
-    BUTTON_MIDDLE, BUTTON_PRIMARY, BUTTON_SECONDARY, MOD_ALT, MOD_CONTROL, MOD_META, MOD_SHIFT,
+    wayland_button, wayland_wheel_delta, wayland_wheel_delta_x, wheel_delta, win32_buttons,
+    win32_modifiers, wire_input, x11_button, x11_modifiers, x11_motion_buttons, x11_scroll_notch,
+    x11_scroll_notch_x, BUTTON_BACK, BUTTON_FORWARD, BUTTON_MIDDLE, BUTTON_PRIMARY,
+    BUTTON_SECONDARY, MOD_ALT, MOD_CONTROL, MOD_META, MOD_SHIFT,
 };
 use opurom_platform::wayland_wire::{decode_event, WireEvent};
 use opurom_platform::{InputEvent, PointerState, Size};
@@ -50,12 +51,16 @@ fn win32_flags_map_to_stable_bits() {
     assert_eq!(win32_buttons(0x0001), BUTTON_PRIMARY);
     assert_eq!(win32_buttons(0x0002), BUTTON_SECONDARY);
     assert_eq!(win32_buttons(0x0010), BUTTON_MIDDLE);
+    assert_eq!(win32_buttons(0x0020), BUTTON_BACK);
+    assert_eq!(win32_buttons(0x0040), BUTTON_FORWARD);
     assert_eq!(win32_buttons(0x0003), BUTTON_PRIMARY | BUTTON_SECONDARY);
     assert_eq!(win32_buttons(0), 0);
     assert_eq!(win32_modifiers(0x0004), MOD_SHIFT);
     assert_eq!(win32_modifiers(0x0008), MOD_CONTROL);
-    assert_eq!(win32_modifiers(0x0020), MOD_ALT);
     assert_eq!(win32_modifiers(0x000c), MOD_SHIFT | MOD_CONTROL);
+    // 0x20 is MK_XBUTTON1, not Alt: Alt has no `wParam` bit.
+    assert_eq!(win32_modifiers(0x0020), 0);
+    assert_eq!(win32_modifiers(0x0040), 0);
 }
 
 #[test]
@@ -242,10 +247,20 @@ fn wheel_notches_are_normalized_from_raw_units() {
 fn x11_scroll_buttons_map_to_notches_and_nothing_else_does() {
     assert_eq!(x11_scroll_notch(4), Some(1.0));
     assert_eq!(x11_scroll_notch(5), Some(-1.0));
-    // 1-3 are real buttons, 6/7 are the documented horizontal gap.
-    for button in [1, 2, 3, 6, 7, 8] {
+    assert_eq!(x11_scroll_notch_x(6), Some(1.0));
+    assert_eq!(x11_scroll_notch_x(7), Some(-1.0));
+    for button in [1, 2, 3, 8] {
         assert_eq!(x11_scroll_notch(button), None, "button {button}");
+        assert_eq!(x11_scroll_notch_x(button), None, "button {button}");
     }
+}
+
+#[test]
+fn wayland_scroll_values_map_to_signed_notches() {
+    assert_eq!(wayland_wheel_delta(256), -1.0);
+    assert_eq!(wayland_wheel_delta(-256), 1.0);
+    assert_eq!(wayland_wheel_delta_x(256), 1.0);
+    assert_eq!(wayland_wheel_delta_x(-256), -1.0);
 }
 
 // ---------------------------------------------------------------- scale

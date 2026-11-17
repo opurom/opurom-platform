@@ -820,25 +820,37 @@ impl X11Host {
                     input_map::x11_button(button.button).unwrap_or(0),
                     input_map::x11_modifiers(button.state),
                 );
-                match input_map::x11_scroll_notch(button.button) {
-                    Some(delta) => self.events.push_back(InputEvent::Wheel {
+                if let Some(delta) = input_map::x11_scroll_notch(button.button) {
+                    self.events.push_back(InputEvent::Wheel {
                         x,
                         y,
                         delta,
+                        delta_x: 0.0,
                         pointer,
-                    }),
-                    None => self.events.push_back(InputEvent::Tap {
+                    });
+                } else if let Some(delta_x) = input_map::x11_scroll_notch_x(button.button) {
+                    self.events.push_back(InputEvent::Wheel {
+                        x,
+                        y,
+                        delta: 0.0,
+                        delta_x,
+                        pointer,
+                    });
+                } else {
+                    self.events.push_back(InputEvent::Tap {
                         x,
                         y,
                         node_id: u32::MAX,
                         pointer,
-                    }),
+                    });
                 }
             }
             BUTTON_RELEASE => {
                 let button = unsafe { event.button };
                 // A scroll notch reports no release of its own in the ABI.
-                if input_map::x11_scroll_notch(button.button).is_none() {
+                if input_map::x11_scroll_notch(button.button).is_none()
+                    && input_map::x11_scroll_notch_x(button.button).is_none()
+                {
                     let (x, y) = logical_xy(self.scale, button.x as f32, button.y as f32);
                     let pointer = self.pointer_state(
                         input_map::x11_motion_buttons(button.state),
@@ -1363,24 +1375,36 @@ fn dispatch_window(
                 modifiers: input_map::x11_modifiers(button.state),
                 ..PointerState::default()
             };
-            match input_map::x11_scroll_notch(button.button) {
-                Some(delta) => window.events.push_back(InputEvent::Wheel {
+            if let Some(delta) = input_map::x11_scroll_notch(button.button) {
+                window.events.push_back(InputEvent::Wheel {
                     x,
                     y,
                     delta,
+                    delta_x: 0.0,
                     pointer,
-                }),
-                None => window.events.push_back(InputEvent::Tap {
+                });
+            } else if let Some(delta_x) = input_map::x11_scroll_notch_x(button.button) {
+                window.events.push_back(InputEvent::Wheel {
+                    x,
+                    y,
+                    delta: 0.0,
+                    delta_x,
+                    pointer,
+                });
+            } else {
+                window.events.push_back(InputEvent::Tap {
                     x,
                     y,
                     node_id: u32::MAX,
                     pointer,
-                }),
+                });
             }
         }
         BUTTON_RELEASE => {
             let button = unsafe { event.button };
-            if input_map::x11_scroll_notch(button.button).is_none() {
+            if input_map::x11_scroll_notch(button.button).is_none()
+                && input_map::x11_scroll_notch_x(button.button).is_none()
+            {
                 let (x, y) = logical_xy(window.scale, button.x as f32, button.y as f32);
                 let pointer = PointerState {
                     buttons: input_map::x11_motion_buttons(button.state),
