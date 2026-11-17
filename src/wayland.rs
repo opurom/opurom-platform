@@ -260,6 +260,7 @@ pub struct WaylandHost {
     seat_capabilities: Option<u32>,
     seat_version: u32,
     keyboard_focus: bool,
+    pointer_inside: bool,
     pointer_frame: PointerFrame,
     /// Buttons held between frames, for drag classification.
     pointer_buttons: Vec<u32>,
@@ -331,6 +332,7 @@ impl WaylandHost {
             seat_capabilities: None,
             seat_version: 0,
             keyboard_focus: false,
+            pointer_inside: false,
             pointer_frame: PointerFrame::default(),
             pointer_buttons: Vec::new(),
             incoming_fds: VecDeque::new(),
@@ -447,12 +449,19 @@ impl WaylandHost {
                         let (_, surface, x, y) = decode_pointer_enter(body)?;
                         let ours = self.is_our_surface(surface);
                         let scale = self.output_scales.current();
+                        let x = input_map::logical_coord(fixed_to_f32(x), scale);
+                        let y = input_map::logical_coord(fixed_to_f32(y), scale);
+                        let was_inside = self.pointer_inside;
+                        self.pointer_inside = ours;
+                        for event in
+                            input_map::hover_events(was_inside, ours, x, y, PointerState::default())
+                        {
+                            self.events.push_back(event);
+                            queued += 1;
+                        }
                         let frame = &mut self.pointer_frame;
                         frame.surface = surface;
-                        frame.position = Some((
-                            input_map::logical_coord(fixed_to_f32(x), scale),
-                            input_map::logical_coord(fixed_to_f32(y), scale),
-                        ));
+                        frame.position = Some((x, y));
                         if !ours {
                             frame.surface = 0;
                         }
@@ -460,6 +469,19 @@ impl WaylandHost {
                     WL_POINTER_LEAVE => {
                         let surface = decode_pointer_leave(body)?;
                         if self.is_our_surface(surface) {
+                            let (x, y) = self.pointer_frame.position.unwrap_or((0.0, 0.0));
+                            let was_inside = self.pointer_inside;
+                            self.pointer_inside = false;
+                            for event in input_map::hover_events(
+                                was_inside,
+                                false,
+                                x,
+                                y,
+                                PointerState::default(),
+                            ) {
+                                self.events.push_back(event);
+                                queued += 1;
+                            }
                             self.pointer_frame.clear();
                             self.pointer_buttons.clear();
                         }

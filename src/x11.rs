@@ -174,12 +174,36 @@ struct XAnyEvent {
 #[repr(C)]
 #[derive(Copy, Clone)]
 #[allow(dead_code)]
+struct XCrossingEvent {
+    kind: c_int,
+    _serial: c_ulong,
+    _send_event: c_int,
+    _display: *mut Display,
+    _window: Window,
+    _root: Window,
+    _subwindow: Window,
+    _time: c_ulong,
+    x: c_int,
+    y: c_int,
+    _x_root: c_int,
+    _y_root: c_int,
+    _mode: c_int,
+    _detail: c_int,
+    _same_screen: c_int,
+    _focus: c_int,
+    state: c_uint,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+#[allow(dead_code)]
 union XEvent {
     kind: c_int,
     any: XAnyEvent,
     key: XKeyEvent,
     button: XButtonEvent,
     configure: XConfigureEvent,
+    crossing: XCrossingEvent,
     pad: [c_long; 24],
 }
 
@@ -253,6 +277,8 @@ const DESTROY_NOTIFY: c_int = 17;
 const CONFIGURE_NOTIFY: c_int = 22;
 const FOCUS_IN: c_int = 9;
 const FOCUS_OUT: c_int = 10;
+const ENTER_NOTIFY: c_int = 7;
+const LEAVE_NOTIFY: c_int = 8;
 const KEY_PRESS_MASK: c_long = 1 << 0;
 const KEY_RELEASE_MASK: c_long = 1 << 1;
 const BUTTON_PRESS_MASK: c_long = 1 << 2;
@@ -261,6 +287,8 @@ const POINTER_MOTION_MASK: c_long = 1 << 6;
 const EXPOSURE_MASK: c_long = 1 << 15;
 const STRUCTURE_NOTIFY_MASK: c_long = 1 << 17;
 const FOCUS_CHANGE_MASK: c_long = 1 << 21;
+const ENTER_WINDOW_MASK: c_long = 1 << 4;
+const LEAVE_WINDOW_MASK: c_long = 1 << 5;
 /// `Button1Mask` in an event's `state` field: the primary button is held.
 /// `XIMPreeditNothing | XIMStatusNothing`: the input method draws its own
 /// preedit and status windows, so the host needs no XIM callbacks.
@@ -440,6 +468,7 @@ pub struct X11Host {
     xic: *mut c_void,
     ime: ImeStatus,
     scale: f32,
+    hover: bool,
     lifecycle: LifecycleTracker,
     lib: Xlib,
 }
@@ -559,6 +588,7 @@ impl X11Host {
             xic: null_mut(),
             ime: ImeStatus::Unavailable(XIM_OPEN_ERROR),
             scale: 1.0,
+            hover: false,
             lifecycle: LifecycleTracker::new(),
             lib,
         };
@@ -615,7 +645,9 @@ impl X11Host {
             | POINTER_MOTION_MASK
             | EXPOSURE_MASK
             | STRUCTURE_NOTIFY_MASK
-            | FOCUS_CHANGE_MASK;
+            | FOCUS_CHANGE_MASK
+            | ENTER_WINDOW_MASK
+            | LEAVE_WINDOW_MASK;
         // SAFETY: all handles came from the live Xlib display above.
         let ready = unsafe {
             (host.lib.select_input)(display, host.window, mask) != 0
@@ -836,6 +868,34 @@ impl X11Host {
                     size: input_map::logical_size(Size { width, height }, self.scale),
                 });
             }
+            ENTER_NOTIFY => {
+                let crossing = unsafe { event.crossing };
+                let (x, y) = logical_xy(self.scale, crossing.x as f32, crossing.y as f32);
+                let pointer = PointerState {
+                    buttons: input_map::x11_motion_buttons(crossing.state),
+                    modifiers: input_map::x11_modifiers(crossing.state),
+                    ..PointerState::default()
+                };
+                let was = self.hover;
+                self.hover = true;
+                for event in input_map::hover_events(was, true, x, y, pointer) {
+                    self.events.push_back(event);
+                }
+            }
+            LEAVE_NOTIFY => {
+                let crossing = unsafe { event.crossing };
+                let (x, y) = logical_xy(self.scale, crossing.x as f32, crossing.y as f32);
+                let pointer = PointerState {
+                    buttons: input_map::x11_motion_buttons(crossing.state),
+                    modifiers: input_map::x11_modifiers(crossing.state),
+                    ..PointerState::default()
+                };
+                let was = self.hover;
+                self.hover = false;
+                for event in input_map::hover_events(was, false, x, y, pointer) {
+                    self.events.push_back(event);
+                }
+            }
             FOCUS_IN => {
                 for state in self.lifecycle.report(Lifecycle::Resumed) {
                     self.events.push_back(InputEvent::Lifecycle(state));
@@ -903,6 +963,7 @@ struct X11Window {
     xim: *mut c_void,
     xic: *mut c_void,
     scale: f32,
+    hover: bool,
     lifecycle: LifecycleTracker,
     alive: bool,
 }
@@ -973,7 +1034,9 @@ impl X11MultiHost {
                     | POINTER_MOTION_MASK
                     | EXPOSURE_MASK
                     | STRUCTURE_NOTIFY_MASK
-                    | FOCUS_CHANGE_MASK;
+                    | FOCUS_CHANGE_MASK
+                    | ENTER_WINDOW_MASK
+                    | LEAVE_WINDOW_MASK;
                 let ready = unsafe {
                     (host.lib.select_input)(display, window, mask) != 0
                         && (host.lib.map_window)(display, window) != 0
@@ -1010,6 +1073,7 @@ impl X11MultiHost {
                         xim,
                         xic,
                         scale,
+                        hover: false,
                         lifecycle: LifecycleTracker::new(),
                         alive: true,
                     },
@@ -1349,6 +1413,34 @@ fn dispatch_window(
             window.events.push_back(InputEvent::Resize {
                 size: input_map::logical_size(client, window.scale),
             });
+        }
+        ENTER_NOTIFY => {
+            let crossing = unsafe { event.crossing };
+            let (x, y) = logical_xy(window.scale, crossing.x as f32, crossing.y as f32);
+            let pointer = PointerState {
+                buttons: input_map::x11_motion_buttons(crossing.state),
+                modifiers: input_map::x11_modifiers(crossing.state),
+                ..PointerState::default()
+            };
+            let was = window.hover;
+            window.hover = true;
+            for event in input_map::hover_events(was, true, x, y, pointer) {
+                window.events.push_back(event);
+            }
+        }
+        LEAVE_NOTIFY => {
+            let crossing = unsafe { event.crossing };
+            let (x, y) = logical_xy(window.scale, crossing.x as f32, crossing.y as f32);
+            let pointer = PointerState {
+                buttons: input_map::x11_motion_buttons(crossing.state),
+                modifiers: input_map::x11_modifiers(crossing.state),
+                ..PointerState::default()
+            };
+            let was = window.hover;
+            window.hover = false;
+            for event in input_map::hover_events(was, false, x, y, pointer) {
+                window.events.push_back(event);
+            }
         }
         FOCUS_IN => {
             for state in window.lifecycle.report(Lifecycle::Resumed) {

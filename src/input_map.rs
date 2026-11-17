@@ -136,6 +136,23 @@ fn fixed_scale(scale: f32) -> i128 {
     (fixed as i128).max(1)
 }
 
+/// Window-level hover transition. Returns `PointerEnter` on the outside→inside
+/// edge, `PointerExit` on inside→outside, and nothing when the state is
+/// unchanged; node-level hover is the ordinary move that follows the enter.
+pub fn hover_events(
+    was_inside: bool,
+    inside: bool,
+    x: f32,
+    y: f32,
+    pointer: PointerState,
+) -> Vec<InputEvent> {
+    match (was_inside, inside) {
+        (false, true) => vec![InputEvent::PointerEnter { x, y, pointer }],
+        (true, false) => vec![InputEvent::PointerExit { x, y, pointer }],
+        _ => Vec::new(),
+    }
+}
+
 /// Convert one physical (backing) pointer coordinate to the ABI's logical
 /// pixels. The window scale is snapped to the fixed-point `DPI_UNIT`
 /// (`1024 == 1.0`) and the division is integer, so every host produces

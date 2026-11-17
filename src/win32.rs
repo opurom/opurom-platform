@@ -24,6 +24,9 @@ use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::Ime::{
     ImmGetCompositionStringW, ImmGetContext, ImmReleaseContext,
 };
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW, LoadCursorW,
     PostQuitMessage, RegisterClassW, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
@@ -40,6 +43,9 @@ use crate::{
     AdapterError, Capabilities, FrameView, InputEvent, Lifecycle, PlatformAdapter, PointerState,
     Size,
 };
+
+// windows-sys Win32_UI_Controls::WM_MOUSELEAVE (0x02A3).
+const WM_MOUSELEAVE: u32 = 675;
 
 const INVALID_STATE: &str = "Win32 state mutex is poisoned";
 const WINDOW_DESTROYED: &str = "the window was destroyed";
@@ -60,6 +66,9 @@ struct Win32State {
     scale: f32,
     /// Application lifecycle cursor fed by focus messages.
     lifecycle: LifecycleTracker,
+    /// Window-level hover edge and the last logical pointer position.
+    hover: bool,
+    last_pointer: (f32, f32),
 }
 
 impl Win32State {
@@ -72,6 +81,8 @@ impl Win32State {
             pending_char: None,
             scale: 1.0,
             lifecycle: LifecycleTracker::new(),
+            hover: false,
+            last_pointer: (0.0, 0.0),
         }
     }
 }
@@ -178,6 +189,16 @@ fn logical_xy(hwnd: HWND, x: f32, y: f32) -> (f32, f32) {
         input_map::logical_coord(x, scale),
         input_map::logical_coord(y, scale),
     )
+}
+
+fn track_mouse_leave(hwnd: HWND) -> bool {
+    let mut request = TRACKMOUSEEVENT {
+        cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+        dwFlags: TME_LEAVE,
+        hwndTrack: hwnd,
+        dwHoverTime: 0,
+    };
+    unsafe { TrackMouseEvent(&mut request) != 0 }
 }
 
 fn pointer_state(wparam: WPARAM) -> PointerState {
@@ -412,7 +433,53 @@ unsafe extern "system" fn window_proc(
         }
         WM_MOUSEMOVE => {
             let (x, y) = logical_pointer(hwnd, lparam);
+            let mut entered = false;
+            {
+                if let Ok(mut windows) = WINDOWS.lock() {
+                    if let Some(state) = windows.get_mut(&hwnd) {
+                        entered = !state.hover;
+                        state.hover = true;
+                        state.last_pointer = (x, y);
+                    }
+                }
+            }
+            if entered {
+                push_event(
+                    hwnd,
+                    InputEvent::PointerEnter {
+                        x,
+                        y,
+                        pointer: pointer_state(wparam),
+                    },
+                );
+                // Request the leave notification outside the state lock.
+                track_mouse_leave(hwnd);
+            }
             push_event(hwnd, input_map::pointer_move(pointer_state(wparam), x, y));
+            0
+        }
+        WM_MOUSELEAVE => {
+            let mut left = false;
+            let mut at = (0.0, 0.0);
+            {
+                if let Ok(mut windows) = WINDOWS.lock() {
+                    if let Some(state) = windows.get_mut(&hwnd) {
+                        left = state.hover;
+                        state.hover = false;
+                        at = state.last_pointer;
+                    }
+                }
+            }
+            if left {
+                push_event(
+                    hwnd,
+                    InputEvent::PointerExit {
+                        x: at.0,
+                        y: at.1,
+                        pointer: PointerState::default(),
+                    },
+                );
+            }
             0
         }
         WM_MOUSEWHEEL => {

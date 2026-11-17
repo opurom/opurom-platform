@@ -195,6 +195,19 @@ pub enum InputEvent {
         y: f32,
         pointer: PointerState,
     },
+    /// The pointer entered the window. A transition between windows is
+    /// delivered as the old window's `PointerExit` before the new window's
+    /// `PointerEnter`; node-level hover is an ordinary `PointerMove` after it.
+    PointerEnter {
+        x: f32,
+        y: f32,
+        pointer: PointerState,
+    },
+    PointerExit {
+        x: f32,
+        y: f32,
+        pointer: PointerState,
+    },
     Wheel {
         x: f32,
         y: f32,

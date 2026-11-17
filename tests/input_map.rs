@@ -3,9 +3,9 @@
 //! can exercise without a window server.
 
 use opurom_platform::input_map::{
-    dpi_from_millimeters, dpi_scale, logical_coord, logical_size, pointer_move, wayland_button,
-    wayland_wheel_delta, wheel_delta, win32_buttons, win32_modifiers, wire_input, x11_button,
-    x11_modifiers, x11_motion_buttons, x11_scroll_notch, BUTTON_BACK, BUTTON_FORWARD,
+    dpi_from_millimeters, dpi_scale, hover_events, logical_coord, logical_size, pointer_move,
+    wayland_button, wayland_wheel_delta, wheel_delta, win32_buttons, win32_modifiers, wire_input,
+    x11_button, x11_modifiers, x11_motion_buttons, x11_scroll_notch, BUTTON_BACK, BUTTON_FORWARD,
     BUTTON_MIDDLE, BUTTON_PRIMARY, BUTTON_SECONDARY, MOD_ALT, MOD_CONTROL, MOD_META, MOD_SHIFT,
 };
 use opurom_platform::wayland_wire::{decode_event, WireEvent};
@@ -116,6 +116,40 @@ fn drag_classification_uses_the_button_mask() {
             pointer: held
         }
     );
+}
+
+// ---------------------------------------------------------------- hover
+
+#[test]
+fn hover_edges_are_deduped_and_ordered() {
+    let pointer = PointerState::default();
+    assert_eq!(
+        hover_events(false, true, 1.0, 2.0, pointer),
+        vec![InputEvent::PointerEnter {
+            x: 1.0,
+            y: 2.0,
+            pointer
+        }]
+    );
+    assert_eq!(
+        hover_events(true, false, 3.0, 4.0, pointer),
+        vec![InputEvent::PointerExit {
+            x: 3.0,
+            y: 4.0,
+            pointer
+        }]
+    );
+    assert!(hover_events(false, false, 0.0, 0.0, pointer).is_empty());
+    assert!(hover_events(true, true, 0.0, 0.0, pointer).is_empty());
+
+    // A window-to-window move delivers exit before enter; the hover follows.
+    let mut stream = Vec::new();
+    stream.extend(hover_events(true, false, 1.0, 2.0, pointer));
+    stream.extend(hover_events(false, true, 3.0, 4.0, pointer));
+    stream.push(pointer_move(pointer, 3.0, 4.0));
+    assert!(matches!(stream[0], InputEvent::PointerExit { .. }));
+    assert!(matches!(stream[1], InputEvent::PointerEnter { .. }));
+    assert!(matches!(stream[2], InputEvent::PointerMove { .. }));
 }
 
 // ---------------------------------------------------------------- coordinates
