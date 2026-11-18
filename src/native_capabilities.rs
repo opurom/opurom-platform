@@ -122,16 +122,14 @@ impl Capability {
     /// the method table is defined by a pinned Flutter source.
     pub fn unavailable_reason(self) -> Option<&'static str> {
         match self {
-            Capability::Network => {
-                Some("no connectivity plugin source in flutter-plugins snapshot")
-            }
-            Capability::Permissions => {
-                Some("no permission plugin source in flutter-plugins snapshot")
-            }
-            Capability::Share => Some("no share plugin source in flutter-plugins snapshot"),
-            Capability::DeviceInfo => {
-                Some("no device_info plugin source in flutter-plugins snapshot")
-            }
+            Capability::Network => Some("no connectivity plugin source in the local snapshot"),
+            Capability::Permissions => Some("no permission plugin source in the local snapshot"),
+            Capability::Share => Some(
+                "no share plugin source in the local snapshot; Share.invoke is frozen on flutter/platform",
+            ),
+            Capability::DeviceInfo => Some(
+                "no device_info plugin source in the local snapshot; local projections are not parity",
+            ),
             _ => None,
         }
     }

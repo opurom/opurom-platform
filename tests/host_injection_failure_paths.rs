@@ -120,7 +120,7 @@ fn missing_channel_and_unimplemented_handlers_are_distinct() {
         missing,
         Reply::PlatformError {
             code: error_codes::UNIMPLEMENTED.to_owned(),
-            message: Some("no connectivity plugin source in flutter-plugins snapshot".to_owned()),
+            message: Some("no connectivity plugin source in the local snapshot".to_owned()),
             details: Value::Null,
         }
     );

@@ -821,6 +821,8 @@ pub mod native_capabilities;
 pub mod native_backends;
 // Unified machine-readable register of unimplemented surfaces.
 pub mod gap_register;
+// Frozen API contracts for capabilities with no local plugin source.
+pub mod frozen_contracts;
 // Media capability contract: camera and video playback.
 pub mod media_capabilities;
 // Unified system event taxonomy and dispatcher.

@@ -405,11 +405,24 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 无渲染、IR、解释器改动，默认态零漂移。
 
+### 第三十四轮：深度轮次 — NoPluginSource 能力冻结契约
+
+新增 `src/frozen_contracts.rs`（5 项模块内单测）与 `tests/frozen_contract_crosscheck.rs`（8 项集成测试）：为 4 条 `NoPluginSource` GAP 能力补上冻结的 wire shape，只记录方法名、参数类型、返回类型与源码 pin，不新增能力实现、不改 `methods_for()` 的派发表。
+
+| 能力 | 冻结形状 | Flutter 源码 |
+| --- | --- | --- |
+| `share` | `Share.invoke`，参数是裸 `String`（选中文本），返回 null | `widgets/editable_text.dart:3025-3037`、`widgets/selectable_region.dart:1595-1600` |
+| `permissions` | `System.exitApplication`，参数是 map（`type` 键为 `cancelable`/`required`，另有 `exitCode`），返回 map（`response` 键） | `services/binding.dart:523-528`、`engine/src/flutter/lib/ui/platform_dispatcher.dart:2481-2498` |
+| `device_info` | 方法表为空，只冻结 GAP 状态 | 本地快照无 `device_info_plus` 源码；本地 display/geometry 投影不构成 parity |
+| `network` | 方法表为空，只冻结 GAP 状态 | 本地快照无 connectivity 源码 |
+
+`frozen_contracts` 与统一 GAP 清单双向交叉验证：能力集合一致、`gap_reason` 与 register 的 `pin` 字段逐字一致、artifact 的 4 条 plugin GAP 行覆盖所有冻结 pin；`validate_arguments` 只校验 wire 形状（裸字符串/带键 map/null），不派发也不构造 `MethodCall`。typed `unavailable_reason` 文案同步为 register 的正式措辞，相关既有测试一并更新。无渲染、IR、解释器改动，默认态零漂移。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 三十三轮本地全量通过；合计 147 个库单测 + 38 个集成测试组、共 419 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
-- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）、`tests/channel_codec_contract.rs`（10）、`tests/capability_channel_alignment.rs`（5）、`tests/declared_channel_disposition.rs`（7）、`tests/gap_register_contract.rs`（8）；新增模块内单测 24 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
+- 结果：2026-11-18 三十四轮本地全量通过；合计 153 个库单测 + 40 个集成测试组、共 433 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
+- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）、`tests/channel_codec_contract.rs`（10）、`tests/capability_channel_alignment.rs`（5）、`tests/declared_channel_disposition.rs`（7）、`tests/gap_register_contract.rs`（8）、`tests/frozen_contract_crosscheck.rs`（8）；新增模块内单测 29 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）
 
