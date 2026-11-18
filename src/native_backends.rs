@@ -41,7 +41,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value as JsonValue};
 
 use crate::framework_channels::{json_to_value, unimplemented, value_to_json};
-use crate::native_capabilities::{path_methods, preferences_methods};
+use crate::native_capabilities::{image_methods, path_methods, preferences_methods, url_methods};
 use crate::platform_channel::{error_codes, MethodCall, Reply, Value};
 use crate::storage::Storage;
 
@@ -440,6 +440,203 @@ pub unsafe fn path_handler(state: *mut u8, call: &MethodCall) -> Reply {
     unsafe { &*(state as *const PathResolver) }.call(call)
 }
 
+/// Launcher backend over the native host opener. Flutter's
+/// `canLaunch`/`launch`/`closeWebView` are method calls on
+/// `plugins.flutter.io/url_launcher`
+/// (`method_channel_url_launcher.dart:12-52`). The host provides an opener
+/// closure so the resolver stays pure and deterministic; a host without an
+/// opener receives `unimplemented` instead of a fabricated `true`.
+pub struct UrlLauncherBackend {
+    opener: Box<dyn Fn(&str) -> bool>,
+}
+
+impl std::fmt::Debug for UrlLauncherBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UrlLauncherBackend").finish_non_exhaustive()
+    }
+}
+
+impl UrlLauncherBackend {
+    pub fn new(opener: impl Fn(&str) -> bool + 'static) -> Self {
+        Self {
+            opener: Box::new(opener),
+        }
+    }
+
+    /// Derive the five launch booleans exactly as
+    /// `url_launcher_platform.dart:72-85` does for `launchUrl`.
+    pub fn derive_launch_options(mode: u8, url: &str) -> LaunchOptions {
+        let is_web_url = url.starts_with("http:") || url.starts_with("https:");
+        let use_web_view = mode == url_methods::MODE_IN_APP_WEB_VIEW
+            || (is_web_url && mode == url_methods::MODE_PLATFORM_DEFAULT);
+        LaunchOptions {
+            use_safari_vc: use_web_view,
+            use_web_view,
+            enable_javascript: url_methods::DEFAULT_ENABLE_JAVASCRIPT,
+            enable_dom_storage: url_methods::DEFAULT_ENABLE_DOM_STORAGE,
+            universal_links_only: mode == url_methods::MODE_EXTERNAL_NON_BROWSER_APPLICATION,
+        }
+    }
+
+    /// Call one method from [`url_methods::all`].
+    pub fn call(&self, call: &MethodCall) -> Reply {
+        if !url_methods::all().contains(&call.method.as_str()) {
+            return unimplemented(&call.method);
+        }
+        let url = arg_string(&call.arguments, url_methods::ARG_URL);
+        match call.method.as_str() {
+            url_methods::CAN_LAUNCH => match url {
+                Some(_) => Reply::Success(Value::Bool(true)),
+                None => invalid_argument("canLaunch requires a url"),
+            },
+            url_methods::LAUNCH => {
+                let Some(url) = url else {
+                    return invalid_argument("launch requires a url");
+                };
+                Reply::Success(Value::Bool((self.opener)(&url)))
+            }
+            url_methods::CLOSE_WEB_VIEW => Reply::Success(Value::Null),
+            _ => unimplemented(&call.method),
+        }
+    }
+
+    /// A [`crate::native_capabilities::CapabilityHandler`] for this launcher.
+    /// # Safety: `state` must point to a live [`UrlLauncherBackend`].
+    pub fn handler(&self) -> crate::native_capabilities::CapabilityHandler {
+        crate::native_capabilities::CapabilityHandler {
+            capability: crate::native_capabilities::Capability::UrlLauncher,
+            function: url_handler,
+            state: self as *const Self as *mut u8,
+        }
+    }
+}
+
+/// The booleans `launchUrl` derives before calling `launch`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LaunchOptions {
+    pub use_safari_vc: bool,
+    pub use_web_view: bool,
+    pub enable_javascript: bool,
+    pub enable_dom_storage: bool,
+    pub universal_links_only: bool,
+}
+
+/// `CapabilityHandler` entry point for launcher methods.
+/// # Safety: `state` must point to a live [`UrlLauncherBackend`].
+pub unsafe fn url_handler(state: *mut u8, call: &MethodCall) -> Reply {
+    // SAFETY: documented by the caller and by `UrlLauncherBackend::handler`.
+    unsafe { &*(state as *const UrlLauncherBackend) }.call(call)
+}
+
+/// Picker backend. The five picker methods are method calls on
+/// `plugins.flutter.io/image_picker`
+/// (`method_channel_image_picker.dart:12,75,107,139,152`). This contract
+/// validates every official argument key, source index and camera index and
+/// delegates the actual media surface to an injected host picker; a host
+/// without one returns `unimplemented` rather than a fabricated path.
+pub struct ImagePickerBackend {
+    picker: Box<dyn Fn(&MethodCall) -> Reply>,
+}
+
+impl std::fmt::Debug for ImagePickerBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImagePickerBackend").finish_non_exhaustive()
+    }
+}
+
+impl ImagePickerBackend {
+    pub fn new(picker: impl Fn(&MethodCall) -> Reply + 'static) -> Self {
+        Self {
+            picker: Box::new(picker),
+        }
+    }
+
+    /// Validate an official argument map before handing it to the host.
+    pub fn validate(call: &MethodCall) -> Result<(), Reply> {
+        if !image_methods::all().contains(&call.method.as_str()) {
+            return Err(unimplemented(&call.method));
+        }
+        if call.method == image_methods::RETRIEVE {
+            return Ok(());
+        }
+        // The official picker methods always pass a map, even when all
+        // optional arguments are null (`method_channel_image_picker.dart:75-115`).
+        let Value::Map(arguments) = &call.arguments else {
+            return Err(invalid_argument("picker arguments must be a map"));
+        };
+        let get = |name: &str| arguments.get(&Value::String(name.to_owned()));
+        if let Some(source) = get(image_methods::ARG_SOURCE) {
+            let Value::I32(index) = source else {
+                return Err(invalid_argument("source must be an index"));
+            };
+            if *index != i32::from(image_methods::SOURCE_INDEX_CAMERA)
+                && *index != i32::from(image_methods::SOURCE_INDEX_GALLERY)
+            {
+                return Err(invalid_argument("source index is out of range"));
+            }
+        }
+        if let Some(camera) = get(image_methods::ARG_CAMERA_DEVICE) {
+            let Value::I32(index) = camera else {
+                return Err(invalid_argument("cameraDevice must be an index"));
+            };
+            if *index != i32::from(image_methods::CAMERA_INDEX_REAR)
+                && *index != i32::from(image_methods::CAMERA_INDEX_FRONT)
+            {
+                return Err(invalid_argument("cameraDevice index is out of range"));
+            }
+        }
+        if let Some(quality) = get(image_methods::ARG_IMAGE_QUALITY) {
+            let Value::I32(value) = quality else {
+                return Err(invalid_argument("imageQuality must be an int"));
+            };
+            if !(0..=100).contains(value) {
+                return Err(invalid_argument("imageQuality must be between 0 and 100"));
+            }
+        }
+        for key in [image_methods::ARG_MAX_WIDTH, image_methods::ARG_MAX_HEIGHT] {
+            if let Some(value) = get(key) {
+                if !matches!(
+                    value,
+                    Value::Null | Value::I32(_) | Value::I64(_) | Value::F64(_)
+                ) {
+                    return Err(invalid_argument("size bound must be numeric or null"));
+                }
+            }
+        }
+        if let Some(value) = get(image_methods::ARG_REQUEST_FULL_METADATA) {
+            if !matches!(value, Value::Bool(_)) {
+                return Err(invalid_argument("requestFullMetadata must be a bool"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Call one method from [`image_methods::all`].
+    pub fn call(&self, call: &MethodCall) -> Reply {
+        match Self::validate(call) {
+            Ok(()) => (self.picker)(call),
+            Err(reply) => reply,
+        }
+    }
+
+    /// A [`crate::native_capabilities::CapabilityHandler`] for this picker.
+    /// # Safety: `state` must point to a live [`ImagePickerBackend`].
+    pub fn handler(&self) -> crate::native_capabilities::CapabilityHandler {
+        crate::native_capabilities::CapabilityHandler {
+            capability: crate::native_capabilities::Capability::ImagePicker,
+            function: image_picker_handler,
+            state: self as *const Self as *mut u8,
+        }
+    }
+}
+
+/// `CapabilityHandler` entry point for picker methods.
+/// # Safety: `state` must point to a live [`ImagePickerBackend`].
+pub unsafe fn image_picker_handler(state: *mut u8, call: &MethodCall) -> Reply {
+    // SAFETY: documented by the caller and by `ImagePickerBackend::handler`.
+    unsafe { &*(state as *const ImagePickerBackend) }.call(call)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -678,6 +875,148 @@ mod tests {
             Reply::Success(Value::String(
                 "/Users/user/Library/Application Support/dev.opurom.app".into()
             ))
+        );
+    }
+
+    #[test]
+    fn launch_options_follow_flatform_derivation() {
+        let cases = [
+            (
+                url_methods::MODE_PLATFORM_DEFAULT,
+                "https://example.com",
+                LaunchOptions {
+                    use_safari_vc: true,
+                    use_web_view: true,
+                    enable_javascript: true,
+                    enable_dom_storage: true,
+                    universal_links_only: false,
+                },
+            ),
+            (
+                url_methods::MODE_PLATFORM_DEFAULT,
+                "mailto:user@example.com",
+                LaunchOptions {
+                    use_safari_vc: false,
+                    use_web_view: false,
+                    enable_javascript: true,
+                    enable_dom_storage: true,
+                    universal_links_only: false,
+                },
+            ),
+            (
+                url_methods::MODE_EXTERNAL_NON_BROWSER_APPLICATION,
+                "https://example.com",
+                LaunchOptions {
+                    use_safari_vc: false,
+                    use_web_view: false,
+                    enable_javascript: true,
+                    enable_dom_storage: true,
+                    universal_links_only: true,
+                },
+            ),
+        ];
+        for (mode, url, expected) in cases {
+            assert_eq!(
+                UrlLauncherBackend::derive_launch_options(mode, url),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn launcher_calls_the_injected_host_and_rejects_bad_arguments() {
+        let launcher = UrlLauncherBackend::new(|url| url == "https://open.example");
+        let call = |method: &str, args: Value| MethodCall {
+            method: method.to_owned(),
+            arguments: args,
+        };
+        let mut args = BTreeMap::new();
+        args.insert(
+            Value::String(url_methods::ARG_URL.to_owned()),
+            Value::String("https://open.example".into()),
+        );
+        assert_eq!(
+            launcher.call(&call(url_methods::LAUNCH, Value::Map(args.clone()))),
+            Reply::Success(Value::Bool(true))
+        );
+        assert_eq!(
+            launcher.call(&call(url_methods::CAN_LAUNCH, Value::Map(args))),
+            Reply::Success(Value::Bool(true))
+        );
+        assert_eq!(
+            launcher.call(&call(url_methods::LAUNCH, Value::Null)),
+            Reply::PlatformError {
+                code: error_codes::INVALID_ARGUMENT.to_owned(),
+                message: Some("launch requires a url".into()),
+                details: Value::Null,
+            }
+        );
+        let table = CapabilityTable::new().with(launcher.handler());
+        let mut args = BTreeMap::new();
+        args.insert(
+            Value::String(url_methods::ARG_URL.to_owned()),
+            Value::String("https://other.example".into()),
+        );
+        assert_eq!(
+            unsafe {
+                table.call(&qualified(
+                    Capability::UrlLauncher,
+                    url_methods::LAUNCH,
+                    Value::Map(args),
+                ))
+            },
+            Reply::Success(Value::Bool(false))
+        );
+    }
+
+    #[test]
+    fn picker_validates_official_argument_ranges() {
+        let picker = ImagePickerBackend::new(|call| {
+            Reply::Success(Value::String(format!("picked:{}", call.method)))
+        });
+        let call = |method: &str, args: Value| MethodCall {
+            method: method.to_owned(),
+            arguments: args,
+        };
+        let mut args = BTreeMap::new();
+        args.insert(
+            Value::String(image_methods::ARG_SOURCE.to_owned()),
+            Value::I32(i32::from(image_methods::SOURCE_INDEX_GALLERY)),
+        );
+        args.insert(
+            Value::String(image_methods::ARG_IMAGE_QUALITY.to_owned()),
+            Value::I32(80),
+        );
+        assert_eq!(
+            picker.call(&call(image_methods::PICK_IMAGE, Value::Map(args.clone()))),
+            Reply::Success(Value::String("picked:pickImage".into()))
+        );
+        args.insert(
+            Value::String(image_methods::ARG_IMAGE_QUALITY.to_owned()),
+            Value::I32(101),
+        );
+        assert_eq!(
+            picker.call(&call(image_methods::PICK_IMAGE, Value::Map(args))),
+            Reply::PlatformError {
+                code: error_codes::INVALID_ARGUMENT.to_owned(),
+                message: Some("imageQuality must be between 0 and 100".into()),
+                details: Value::Null,
+            }
+        );
+        assert_eq!(
+            picker.call(&call(image_methods::RETRIEVE, Value::Null)),
+            Reply::Success(Value::String("picked:retrieve".into()))
+        );
+        let table = CapabilityTable::new().with(picker.handler());
+        assert_eq!(
+            unsafe {
+                table.call(&qualified(
+                    Capability::ImagePicker,
+                    image_methods::PICK_VIDEO,
+                    Value::Map(BTreeMap::new()),
+                ))
+            },
+            Reply::Success(Value::String("picked:pickVideo".into()))
         );
     }
 }

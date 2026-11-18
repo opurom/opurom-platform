@@ -69,16 +69,26 @@ Flutter 版本：**3.50-candidate**，engine `371f77202a73e8dff57a8b3bff75bca55c
 
 追加机制规则：`serde_json = "=1.0.154"` 与核心仓同版本锁定，仅用于 JSON 框架通道与类型化偏好值；测试断言中 `&[]` 改为 `.is_empty()` 避免 serde_json 的 `PartialEq` 歧义。
 
+### 第三轮：url_launcher / image_picker 宿主后端
+
+| Flutter 源码（3.50-candidate，flutter-plugins @ 557d3284） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `url_launcher_platform_interface/lib/src/url_launcher_platform.dart:72-85` — `launchUrl` 的 `useWebView`/`universalLinksOnly` 布尔派生 | `UrlLauncherBackend::derive_launch_options` / `LaunchOptions` | 三组派生断言：https 默认 in-app、mailto 走系统、externalNonBrowser 仅外链 |
+| `url_launcher_platform_interface/lib/method_channel_url_launcher.dart:12-52` — `canLaunch`/`launch`/`closeWebView` 与参数表 | `UrlLauncherBackend::call` + 注入 opener | 成功/失败返回、缺 url 报 invalid_argument、CapabilityTable 接入 |
+| `url_launcher_platform_interface/lib/src/types.dart:11-70` — `PreferredLaunchMode` 索引与 `InAppWebViewConfiguration` 默认值 | `url_methods::MODE_*` 与 `DEFAULT_ENABLE_*` 常量 | 常量与默认值逐字对齐 |
+| `image_picker_platform_interface/lib/src/method_channel/method_channel_image_picker.dart:12,75-152` — 五个通道方法与参数表 | `image_methods` 扩展：`RETRIEVE`、source/camera 索引、六个参数键、image/video 类型常量 | source 索引、imageQuality 0-100、RETRIEVE 免参数、CapabilityTable 接入 |
+| `image_picker_platform_interface/lib/src/types/types.dart:15-18` — `kTypeImage`/`kTypeVideo` | `TYPE_IMAGE`/`TYPE_VIDEO` | 字符串逐字断言 |
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 两轮全量通过；第二轮新增 `framework_channels` 6 项与 `native_backends` 4 项模块单测，合计 89 个库单测 + 23 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0）。
+- 结果：2026-11-18 三轮全量通过；第三轮新增 launcher/picker 后端 3 项与派生规则断言，合计 92 个库单测 + 23 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0）。
 - 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）；新增模块内单测 10 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）
 
 1. **设备信息/网络/权限/分享**：本地 `flutter-plugins` 快照无官方插件源码，按硬约束不能自创 API；需先取到 pinned 官方源码再实现。已用 typed `unimplemented` 占位，不伪造成功。
-2. **真实宿主后端**：`PreferencesBackend` 与 `PathResolver` 已落地并接入 `CapabilityTable`；`url_launcher`/`image_picker` 仍只有方法契约，需与 mobile/web/desktop 各宿主对接。
+2. **真实宿主后端**：`PreferencesBackend`、`PathResolver`、`UrlLauncherBackend`、`ImagePickerBackend` 均已落地并接入 `CapabilityTable`；各端原生 opener/picker 表面仍需 mobile/web/desktop 宿主注入实现。
 3. **系统事件生产者**：`SystemEventDispatcher` 只做分发；宿主侧键盘/旋转/亮度/省电/刷新率的 OS 信号采集尚未接入。
 4. **插件注册执行端**：`RegistrationPlan` 是冻结计划；`opurom-plugins` CLI 与 `opurom-cli` 各端工程生成尚未消费该计划。
 5. **跨仓库对齐**：`opurom-runtime-adapters` 的 9 类能力码与此处 12 类契约尚未统一命名，需 adapters 侧协同（本模块不修改他仓库代码）。

@@ -24,12 +24,12 @@
 //!   (directory getters and their nullability).
 //! - `flutter-plugins/packages/path_provider/path_provider_platform_interface/lib/src/method_channel_path_provider.dart:15-52`
 //!   (channel name `plugins.flutter.io/path_provider`).
-//! - `flutter-plugins/packages/url_launcher/url_launcher_platform_interface/lib/src/url_launcher_platform.dart:33-96`
-//!   (`canLaunch`/`launch`/`launchUrl`/`closeWebView` contract).
-//! - `flutter-plugins/packages/url_launcher/url_launcher_platform_interface/lib/method_channel_url_launcher.dart:7-55`
+//! - `flutter-plugins/packages/url_launcher/url_launcher_platform_interface/lib/src/url_launcher_platform.dart:56-87`
+//!   (`canLaunch`/`launch`/`launchUrl`/`closeWebView` contract and mode derivation).
+//! - `flutter-plugins/packages/url_launcher/url_launcher_platform_interface/lib/method_channel_url_launcher.dart:12-52`
 //!   (channel name and argument map).
-//! - `flutter-plugins/packages/image_picker/image_picker/lib/image_picker.dart:212-337`
-//!   (`pickImage`/`pickMultiImage`/`pickVideo` and `ImageSource` arguments).
+//! - `flutter-plugins/packages/image_picker/image_picker_platform_interface/lib/src/method_channel/method_channel_image_picker.dart:12,75-152`
+//!   (`pickImage`/`pickMultiImage`/`pickVideo`/`retrieve` and argument maps).
 
 use std::collections::BTreeMap;
 
@@ -231,25 +231,61 @@ pub mod url_methods {
     pub const ARG_UNIVERSAL_LINKS_ONLY: &str = "universalLinksOnly";
     pub const ARG_HEADERS: &str = "headers";
 
+    /// `method_channel_url_launcher.dart:36-51` omits the web-only window
+    /// name from the platform call; `types.dart:56-65` defines it.
+    pub const ARG_WEB_ONLY_WINDOW_NAME: &str = "webOnlyWindowName";
+
+    /// `PreferredLaunchMode` index order (`types.dart:11-26`).
+    pub const MODE_PLATFORM_DEFAULT: u8 = 0;
+    pub const MODE_IN_APP_WEB_VIEW: u8 = 1;
+    pub const MODE_EXTERNAL_APPLICATION: u8 = 2;
+    pub const MODE_EXTERNAL_NON_BROWSER_APPLICATION: u8 = 3;
+
+    /// Web-view configuration defaults (`types.dart:34-36`).
+    pub const DEFAULT_ENABLE_JAVASCRIPT: bool = true;
+    pub const DEFAULT_ENABLE_DOM_STORAGE: bool = true;
+
     pub fn all() -> &'static [&'static str] {
-        &[CAN_LAUNCH, LAUNCH, LAUNCH_URL, CLOSE_WEB_VIEW]
+        &[CAN_LAUNCH, LAUNCH, CLOSE_WEB_VIEW]
     }
 }
 
-/// Method names for `image_picker`, from `image_picker.dart:212-337`.
+/// Method names for `image_picker` from
+/// `image_picker_platform_interface/lib/src/method_channel/method_channel_image_picker.dart:12,75,107,139,152`
+/// and `types/types.dart:15-18`.
 pub mod image_methods {
     pub const PICK_IMAGE: &str = "pickImage";
     pub const PICK_MULTI_IMAGE: &str = "pickMultiImage";
     pub const PICK_VIDEO: &str = "pickVideo";
+    pub const RETRIEVE: &str = "retrieve";
 
-    /// `ImageSource.camera`/`.gallery` are the two accepted values
-    /// (`image_picker.dart:33,212-221`).
+    /// `ImageSource.camera`/`.gallery` index order
+    /// (`types/image_source.dart:9-16`). The platform wire uses the index,
+    /// but the typed contract keeps the canonical names for callers.
     pub const SOURCE_CAMERA: &str = "camera";
     pub const SOURCE_GALLERY: &str = "gallery";
+    pub const SOURCE_INDEX_CAMERA: u8 = 0;
+    pub const SOURCE_INDEX_GALLERY: u8 = 1;
+    /// `types/camera_device.dart:9-15`.
+    pub const CAMERA_REAR: &str = "rear";
+    pub const CAMERA_FRONT: &str = "front";
+    pub const CAMERA_INDEX_REAR: u8 = 0;
+    pub const CAMERA_INDEX_FRONT: u8 = 1;
+
+    /// Argument keys from `method_channel_image_picker.dart:108-115,139-143,76-82`.
     pub const ARG_SOURCE: &str = "source";
+    pub const ARG_MAX_WIDTH: &str = "maxWidth";
+    pub const ARG_MAX_HEIGHT: &str = "maxHeight";
+    pub const ARG_IMAGE_QUALITY: &str = "imageQuality";
+    pub const ARG_CAMERA_DEVICE: &str = "cameraDevice";
+    pub const ARG_REQUEST_FULL_METADATA: &str = "requestFullMetadata";
+    pub const ARG_MAX_DURATION: &str = "maxDuration";
+    /// `types/types.dart:15-18`.
+    pub const TYPE_IMAGE: &str = "image";
+    pub const TYPE_VIDEO: &str = "video";
 
     pub fn all() -> &'static [&'static str] {
-        &[PICK_IMAGE, PICK_MULTI_IMAGE, PICK_VIDEO]
+        &[PICK_IMAGE, PICK_MULTI_IMAGE, PICK_VIDEO, RETRIEVE]
     }
 }
 
