@@ -146,10 +146,16 @@ macOS 通知映射（`objc2-app-kit` 0.3.2 静态通知名）：
 
 GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后台 isolate 的平台通道机制；Opurom 只平移该机制，宿主原生调度器（Android WorkManager/iOS BGTask 等）按各端原生机制注入，不自创 API。
 
+### 第十轮：深度轮次 — 边界与异常输入补全
+
+- `framework_channels`：新增 2 项边界测试，覆盖超大 JSON 整数按 Dart 语义回落为 `double`、非有限指数 JSON 被拒、嵌套对象保真、非对象 method call 与错误信封字段类型拒绝、非 UTF-8 与空生命周期载荷拒绝。
+- `native_backends`：新增 1 项畸形宿主参数测试，覆盖偏好设置缺 key、类型不匹配、launcher 非映射参数、picker source 索引类型错误。
+- 全部沿用 pinned 源码语义：`message_codecs.dart:88-200`（JSON 编解码）、`binding.dart:448-457`（生命周期）、`method_channel_url_launcher.dart:12-52`、`method_channel_image_picker.dart:75-152`。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 九轮全量通过；第九轮新增后台任务契约 4 项单测，合计 109 个库单测 + 23 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0）。
+- 结果：2026-11-18 十轮全量通过；第十轮新增边界测试 3 项，合计 112 个库单测 + 23 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0）。
 - 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）；新增模块内单测 10 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）

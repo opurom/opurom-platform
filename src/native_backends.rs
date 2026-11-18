@@ -879,6 +879,52 @@ mod tests {
     }
 
     #[test]
+    fn backend_rejects_malformed_host_arguments() {
+        let root = temp_dir("malformed");
+        let mut backend = PreferencesBackend::open(&root).unwrap();
+        assert_eq!(
+            backend.call(&MethodCall {
+                method: preferences_methods::SET_STRING.to_owned(),
+                arguments: Value::Null,
+            }),
+            invalid_argument("preference method requires a string key")
+        );
+        assert_eq!(
+            backend.call(&MethodCall {
+                method: preferences_methods::SET_STRING.to_owned(),
+                arguments: Value::Map(BTreeMap::from([
+                    (
+                        Value::String("key".to_owned()),
+                        Value::String("k".to_owned())
+                    ),
+                    (Value::String("value".to_owned()), Value::I32(7)),
+                ])),
+            }),
+            invalid_argument("setString requires a String value")
+        );
+        let launcher = UrlLauncherBackend::new(|_| true);
+        assert_eq!(
+            launcher.call(&MethodCall {
+                method: url_methods::LAUNCH.to_owned(),
+                arguments: Value::I32(1),
+            }),
+            invalid_argument("launch requires a url")
+        );
+        let picker = ImagePickerBackend::new(|call| Reply::Success(Value::Null));
+        assert_eq!(
+            picker.call(&MethodCall {
+                method: image_methods::PICK_IMAGE.to_owned(),
+                arguments: Value::Map(BTreeMap::from([(
+                    Value::String(image_methods::ARG_SOURCE.to_owned()),
+                    Value::String("camera".to_owned())
+                )])),
+            }),
+            invalid_argument("source must be an index")
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn launch_options_follow_flatform_derivation() {
         let cases = [
             (

@@ -522,6 +522,62 @@ mod tests {
     }
 
     #[test]
+    fn json_edge_inputs_are_rejected_or_preserved() {
+        // Integers outside i64 are not Dart ints; never fabricate a value.
+        // serde_json maps an unsigned value beyond i64 into f64, matching
+        // Dart's json.decoder number fallback rather than fabricating an int.
+        assert_eq!(
+            decode_json_message(br#"18446744073709551616"#),
+            Ok(Value::F64(18446744073709551616.0))
+        );
+        assert_eq!(
+            decode_json_message(br#"1e400"#),
+            Err(CodecError::Corrupt("invalid JSON message"))
+        );
+        // A non-string object key cannot map to Dart's String key type.
+        let mut object = JsonMap::new();
+        object.insert("nested".to_owned(), JsonValue::Number(JsonNumber::from(7)));
+        assert_eq!(
+            json_to_value(&JsonValue::Object({
+                let mut outer = JsonMap::new();
+                outer.insert("outer".to_owned(), JsonValue::Object(object));
+                outer
+            })),
+            Ok(Value::Map(BTreeMap::from([(
+                Value::String("outer".to_owned()),
+                Value::Map(BTreeMap::from([(
+                    Value::String("nested".to_owned()),
+                    Value::I32(7)
+                )]))
+            )])))
+        );
+        assert_eq!(
+            decode_json_method_call(br#"[1,2]"#),
+            Err(CodecError::Corrupt("expected method call map"))
+        );
+        assert_eq!(
+            decode_json_envelope(br#"{"success":true}"#),
+            Err(CodecError::Corrupt("expected envelope list"))
+        );
+        assert_eq!(
+            decode_json_envelope(br#"["code",123,null]"#),
+            Err(CodecError::Corrupt("invalid envelope message"))
+        );
+    }
+
+    #[test]
+    fn lifecycle_rejects_non_utf8_and_empty_payloads() {
+        assert_eq!(
+            parse_lifecycle_message(&[0xff]),
+            Err(CodecError::Corrupt("lifecycle message is not UTF-8"))
+        );
+        assert_eq!(
+            parse_lifecycle_message(b""),
+            Err(CodecError::Corrupt("unknown lifecycle message"))
+        );
+    }
+
+    #[test]
     fn haptic_types_fold_into_one_channel_method() {
         for name in [
             None,
