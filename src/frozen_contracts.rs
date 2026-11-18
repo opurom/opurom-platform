@@ -233,24 +233,31 @@ pub fn validate_call(method: &FrozenMethod, call: &MethodCall) -> Option<Reply> 
 ///
 /// Frozen contracts use framework method names (`Share.invoke`,
 /// `System.exitApplication`); capability calls use qualified names
-/// (`share.*`, `permissions.*`). Only the frozen methods whose bare name
-/// matches the capability's wire method participate.
+/// (`share.*`, `permissions.*`). A call matches only when its method is the
+/// exact frozen name, or the frozen name after exactly one capability
+/// prefix (`share.Share.invoke`). A longer qualified chain is not one of
+/// the two declared shapes; accepting any last-segment match would let
+/// `share.anything.Share.invoke` pass the frozen gate.
 pub fn method_for_call(call: &MethodCall) -> Option<&'static FrozenMethod> {
-    let capability = Capability::from_str(call.method.split('.').next().unwrap_or(""))?;
+    // Shape 1: the exact frozen wire name (`Share.invoke`), whose capability
+    // is derivable from the frozen contract itself.
+    let direct = CONTRACTS.iter().find(|entry| {
+        entry
+            .methods
+            .iter()
+            .any(|method| method.name == call.method)
+    });
+    if let Some(entry) = direct {
+        return entry
+            .methods
+            .iter()
+            .find(|method| method.name == call.method);
+    }
+    // Shape 2: one capability prefix (`share.Share.invoke`).
+    let (capability_name, rest) = call.method.split_once('.')?;
+    let capability = Capability::from_str(capability_name)?;
     let frozen = contract(capability)?;
-    // Capability-qualified calls keep the full wire name after the first
-    // dot (`share.Share.invoke` -> `Share.invoke`), while a bare name may
-    // carry only the last segment. Match both shapes.
-    let rest = call
-        .method
-        .split_once('.')
-        .map(|(_, rest)| rest)
-        .unwrap_or("");
-    let bare = call.method.rsplit('.').next().unwrap_or(&call.method);
-    frozen
-        .methods
-        .iter()
-        .find(|method| method.name == rest || method.name == bare)
+    frozen.methods.iter().find(|method| method.name == rest)
 }
 
 #[cfg(test)]
@@ -302,6 +309,36 @@ mod tests {
             arguments: Value::String("text".to_owned()),
         };
         assert_eq!(validate_call(share, &correct), None);
+    }
+
+    #[test]
+    fn method_for_call_accepts_only_the_two_declared_shapes() {
+        let frozen = contract(Capability::Share).unwrap();
+        let method = &frozen.methods[0];
+        // Exact frozen name, and one capability prefix.
+        let bare = MethodCall {
+            method: "Share.invoke".to_owned(),
+            arguments: Value::String("text".to_owned()),
+        };
+        let qualified = MethodCall {
+            method: "share.Share.invoke".to_owned(),
+            arguments: Value::String("text".to_owned()),
+        };
+        assert_eq!(method_for_call(&bare), Some(method));
+        assert_eq!(method_for_call(&qualified), Some(method));
+        // A longer chain and an unknown prefix are neither shape.
+        for name in [
+            "share.anything.Share.invoke",
+            "share.",
+            ".Share.invoke",
+            "unknown.Share.invoke",
+        ] {
+            let call = MethodCall {
+                method: name.to_owned(),
+                arguments: Value::String("text".to_owned()),
+            };
+            assert_eq!(method_for_call(&call), None, "{name} must not match");
+        }
     }
 
     #[test]

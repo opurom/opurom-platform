@@ -459,6 +459,12 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 新增 `tests/capability_dispatch_failure_contract.rs`（6 项）：malformed 调用不进 handler、缺键/错类型统一错误模板、合法 GAP 调用恒 unimplemented、非 GAP 正常派发、错误信封字节往返、形状闸门纯函数可重放且不改表。无渲染、IR、解释器改动，默认态零漂移。
 
+### 第三十一轮：深度轮次 — frozen 方法匹配的形状收口
+
+`frozen_contracts::method_for_call` 此前用 `rsplit('.')` 取最后一段匹配 frozen 名，使 `share.anything.Share.invoke` 这类任意限定链都能通过 frozen gate（`MethodCall` 的 wire 名是单个字符串，`services/message_codecs.dart:600-617`）。本轮只接受两种声明形状：精确 frozen 名（能力由 frozen 契约自推），或恰好一个能力前缀（`share.Share.invoke`）；其余一律不参与 frozen 校验。新增 1 项单测覆盖五类错误形状。无渲染、IR、解释器改动，默认态零漂移。
+
+> 本地 GPU 环境基线同前两轮：3 个既存 GPU 测试在本机因软件渲染器环境失败，干净 HEAD 复现，与本轮无关；远端 CI 全绿。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
