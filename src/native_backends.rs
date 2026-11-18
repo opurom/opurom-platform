@@ -56,7 +56,7 @@ fn arg_string(arguments: &Value, name: &str) -> Option<String> {
     let Value::Map(map) = arguments else {
         return None;
     };
-    match map.get(&Value::String(name.to_owned())) {
+    match Value::map_get_str(map, name) {
         Some(Value::String(value)) => Some(value.clone()),
         _ => None,
     }
@@ -66,7 +66,7 @@ fn arg_value(arguments: &Value, name: &str) -> Option<Value> {
     let Value::Map(map) = arguments else {
         return None;
     };
-    map.get(&Value::String(name.to_owned())).cloned()
+    Value::map_get_str(map, name).cloned()
 }
 
 fn typed_json(value_type: &str, value: &Value) -> Result<JsonValue, CodecFailure> {
@@ -563,7 +563,7 @@ impl ImagePickerBackend {
         let Value::Map(arguments) = &call.arguments else {
             return Err(invalid_argument("picker arguments must be a map"));
         };
-        let get = |name: &str| arguments.get(&Value::String(name.to_owned()));
+        let get = |name: &str| Value::map_get_str(arguments, name);
         if let Some(source) = get(image_methods::ARG_SOURCE) {
             let Value::I32(index) = source else {
                 return Err(invalid_argument("source must be an index"));

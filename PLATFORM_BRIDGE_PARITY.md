@@ -223,6 +223,12 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 优化只改变内部索引与溢出循环，不变更 wire 字节、错误码或生命周期；默认态零漂移，不触碰 IR/渲染/解释器。
 
+### 第二十一轮：深度轮次 — 热路径分配收口
+
+- `Value::map_get_str` 统一 8 处 method-call 参数字符串键查找（`native_backends.rs` 与 `platform_view_bridge.rs`）；所有查找走同一显式键构造点，避免散落的 `Value::String(name.to_owned())`，并保留 `message_codecs.dart:310-324,580-657` 的精确键身份语义。曾试验 `Borrow<str>` + 哨兵方案，实测会与真实字符串键或数值键产生冲突，已撤回；测试覆盖空字符串键与 I32 键并存时不互相遮蔽。
+- `framework_channels::unimplemented` 以预分配 `Vec` + `String::from_utf8` 构造诊断消息，替代 `format!` 的格式化 machinery；保留 `platform_channel.dart:350-366` 的 null-reply / `unimplemented` 错误语义，新增测试逐字段断言消息并做 envelope 往返。
+- 新增 2 项测试（字符串键身份、unimplemented envelope 往返）。无渲染、IR、解释器改动，默认态零漂移。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。

@@ -385,9 +385,21 @@ pub fn haptic_method(type_name: Option<&str>) -> Option<&'static str> {
 /// Opurom's capability table keeps the error visible instead of fabricating
 /// success (`platform_channel.dart:350-366`).
 pub fn unimplemented(method: &str) -> Reply {
+    // Build the diagnostic with exactly one owned allocation: the `Vec`
+    // returned by `String::from_utf8`. `format!` uses a formatting machinery
+    // allocation plus a string allocation for the same bytes.
+    let prefix = b"no host handler for ";
+    let mut message = Vec::with_capacity(prefix.len() + method.len());
+    message.extend_from_slice(prefix);
+    message.extend_from_slice(method.as_bytes());
+    let message = match String::from_utf8(message) {
+        Ok(message) => message,
+        // `method` is a `&str` and the prefix is ASCII; this is unreachable.
+        Err(_) => format!("no host handler for {method}"),
+    };
     Reply::PlatformError {
         code: error_codes::UNIMPLEMENTED.to_owned(),
-        message: Some(format!("no host handler for {method}")),
+        message: Some(message),
         details: Value::Null,
     }
 }
@@ -478,6 +490,23 @@ mod tests {
         );
         assert!(decode_json_envelope(b"[]").is_err());
         assert!(encode_json_envelope(&Reply::MissingPlugin).is_err());
+    }
+
+    #[test]
+    fn unimplemented_reply_uses_one_exact_diagnostic_allocation() {
+        let reply = unimplemented("plugins.flutter.io/camera/takePicture");
+        assert_eq!(
+            reply,
+            Reply::PlatformError {
+                code: error_codes::UNIMPLEMENTED.to_owned(),
+                message: Some(
+                    "no host handler for plugins.flutter.io/camera/takePicture".to_owned()
+                ),
+                details: Value::Null,
+            }
+        );
+        let encoded = encode_envelope(&reply).unwrap().unwrap();
+        assert_eq!(decode_envelope(Some(&encoded)).unwrap(), reply);
     }
 
     #[test]

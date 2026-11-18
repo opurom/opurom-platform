@@ -383,3 +383,38 @@ fn distinct_numeric_tags_are_distinct_map_keys() {
     let bytes = encode_message(&value).unwrap().unwrap();
     assert_eq!(decode_message(Some(&bytes)).unwrap(), value);
 }
+
+#[test]
+fn borrowed_string_key_lookup_preserves_codec_key_identity() {
+    // message_codecs.dart:310-324,580-657: a method-call argument map is
+    // keyed by exact string values. Borrowed lookup must match only the
+    // string key, never a numeric key with the same tag bytes or an empty
+    // non-string borrow.
+    use opurom_platform::platform_channel::Value;
+
+    let mut map = BTreeMap::new();
+    map.insert(Value::I32(7), Value::String("numeric".to_owned()));
+    map.insert(
+        Value::String(String::new()),
+        Value::String("empty".to_owned()),
+    );
+    map.insert(
+        Value::String("url".to_owned()),
+        Value::String("https://example.test".to_owned()),
+    );
+    assert_eq!(
+        Value::map_get_str(&map, "url"),
+        Some(&Value::String("https://example.test".to_owned()))
+    );
+    assert_eq!(
+        Value::map_get_str(&map, ""),
+        Some(&Value::String("empty".to_owned()))
+    );
+    assert_eq!(Value::map_get_str(&map, "missing"), None);
+    // The numeric key remains addressable by its typed Value.
+    assert_eq!(
+        map.get(&Value::I32(7)),
+        Some(&Value::String("numeric".to_owned()))
+    );
+    assert_eq!(map.len(), 3);
+}

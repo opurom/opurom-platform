@@ -131,7 +131,7 @@ fn arg_number(arguments: &Value, name: &str) -> Option<i32> {
     let Value::Map(map) = arguments else {
         return None;
     };
-    match map.get(&Value::String(name.to_owned())) {
+    match Value::map_get_str(map, name) {
         Some(Value::I32(value)) => Some(*value),
         Some(Value::I64(value)) => i32::try_from(*value).ok(),
         _ => None,
@@ -142,7 +142,7 @@ fn arg_string(arguments: &Value, name: &str) -> Option<String> {
     let Value::Map(map) = arguments else {
         return None;
     };
-    match map.get(&Value::String(name.to_owned())) {
+    match Value::map_get_str(map, name) {
         Some(Value::String(value)) => Some(value.clone()),
         _ => None,
     }
@@ -152,7 +152,7 @@ fn arg_value(arguments: &Value, name: &str) -> Option<Value> {
     let Value::Map(map) = arguments else {
         return None;
     };
-    map.get(&Value::String(name.to_owned())).cloned()
+    Value::map_get_str(map, name).cloned()
 }
 
 fn handle(arguments: &Value) -> Result<ViewHandle, Reply> {
@@ -204,9 +204,9 @@ impl<'a> PlatformViewBridge<'a> {
         match call.method.as_str() {
             view_methods::CREATE => {
                 let view_type = match &call.arguments {
-                    Value::Map(map) => map
-                        .get(&Value::String(view_methods::ARG_VIEW_TYPE.to_owned()))
-                        .cloned(),
+                    Value::Map(map) => {
+                        Value::map_get_str(map, view_methods::ARG_VIEW_TYPE).cloned()
+                    }
                     _ => None,
                 };
                 if !matches!(view_type, Some(Value::String(_))) {

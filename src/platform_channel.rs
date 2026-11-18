@@ -64,6 +64,15 @@ pub enum Value {
 }
 
 impl Value {
+    /// Look up a string key in a Flutter map value through one central helper.
+    /// Flutter method-call arguments are string-keyed maps
+    /// (`message_codecs.dart:580-657`) and the engine's channel map is
+    /// name-keyed (`channel_buffers.dart:345,382-385`); both must distinguish
+    /// string keys from numeric/typed keys (`message_codecs.dart:310-324`).
+    pub fn map_get_str<'a>(map: &'a BTreeMap<Value, Value>, key: &str) -> Option<&'a Value> {
+        map.get(&Value::String(key.to_owned()))
+    }
+
     /// Flutter's tag byte for this value (`message_codecs.dart:310-324`).
     pub fn tag(&self) -> u8 {
         match self {
