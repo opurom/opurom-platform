@@ -23,6 +23,19 @@
 //! validates and normalizes those wire values; it never guesses a missing
 //! platform capability.
 //!
+//! The two platform families do not share the same operation set, and this
+//! module freezes that difference instead of accepting every shape on every
+//! platform:
+//! - Android (`AndroidViewController`, `:746-1346`): `touch` (`:936,1255`),
+//!   `setDirection` (`:989`), `clearFocus` (`:1037`), `resize` (`:1442`),
+//!   `offset` (`:1472`), `isSurfaceControlEnabled` (`:1530`).
+//! - Darwin (`DarwinPlatformViewController`, `:1579-1642`): `acceptGesture`
+//!   (`:1617`) and `rejectGesture` (`:1627`) only; Darwin has no layout
+//!   direction on the channel (`:1600-1604`).
+//! - Shared: `create` (`:286,325,1386-1388`), `rejectGesture` (`:1406,1568,
+//!   :1627`), `dispose` (`:1481,1517,1560,1637`) and the `viewFocused` host
+//!   callback (`:152,181,210,238,288,327`).
+//!
 //! Opurom keeps the same wire operations but routes them to the existing
 //! [`crate::platform_view::PlatformViewRegistry`]: a compile-time handle
 //! table with strict lifecycle and deterministic compositing order. No
@@ -32,6 +45,29 @@ use crate::framework_channels::unimplemented;
 use crate::platform_channel::{error_codes, MethodCall, Reply, Value};
 use crate::platform_view::{PlatformViewError, PlatformViewRegistry, ViewBounds, ViewHandle};
 use crate::wayland_wire::WireEvent;
+
+/// The native platform family that owns a platform-view operation.
+///
+/// Flutter's platform-view service has two independent controller families
+/// (`services/platform_views.dart:746-1346` for Android,
+/// `:1579-1642` for Darwin). They do not implement the same operations, so a
+/// host must know which family it serves before it accepts a call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ViewPlatform {
+    /// Android (`platform_views.dart:746-1346`).
+    Android,
+    /// iOS and macOS (`platform_views.dart:1579-1642`).
+    Darwin,
+}
+
+impl ViewPlatform {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ViewPlatform::Android => "android",
+            ViewPlatform::Darwin => "darwin",
+        }
+    }
+}
 
 /// Method names on `flutter/platform_views` and `flutter/platform_views_2`
 /// (`services/platform_views.dart:286-1637`).
@@ -167,6 +203,11 @@ fn handle(arguments: &Value) -> Result<ViewHandle, Reply> {
 /// arguments, so the same sequence always produces the same replies.
 pub struct PlatformViewBridge<'a> {
     registry: &'a mut PlatformViewRegistry,
+    /// The platform family this host serves. Flutter's Android and Darwin
+    /// controllers implement different operation sets
+    /// (`platform_views.dart:746-1346,1579-1642`); routing a call through the
+    /// wrong family's table is a typed gap, not a silent success.
+    platform: ViewPlatform,
     /// Reply to `isSurfaceControlEnabled` from the injected host capability.
     /// Flutter's HCPP path is opt-in on Impeller Android and has no framework
     /// default (`platform_views.dart:1524-1532`); a host without the feature
@@ -176,10 +217,22 @@ pub struct PlatformViewBridge<'a> {
 
 impl<'a> PlatformViewBridge<'a> {
     pub fn new(registry: &'a mut PlatformViewRegistry) -> Self {
+        Self::for_platform(registry, ViewPlatform::Android)
+    }
+
+    /// Build a bridge for one platform family. `Android` is the default so
+    /// existing callers keep their behavior; a Darwin host must opt in.
+    pub fn for_platform(registry: &'a mut PlatformViewRegistry, platform: ViewPlatform) -> Self {
         Self {
             registry,
+            platform,
             surface_control_enabled: false,
         }
+    }
+
+    /// The platform family this bridge serves.
+    pub fn platform(&self) -> ViewPlatform {
+        self.platform
     }
 
     /// Inject the host's HCPP capability (`platform_views.dart:1529-1532`).
@@ -196,6 +249,44 @@ impl<'a> PlatformViewBridge<'a> {
         }
         if call.method == view_methods::IS_SURFACE_CONTROL_ENABLED {
             return Reply::Success(Value::Bool(self.surface_control_enabled));
+        }
+        // Platform ownership check (`platform_views.dart:746-1346,1579-1642`):
+        // an operation outside the serving family is a typed gap, not a
+        // silent success. `create`, `dispose`, `touch` and the host
+        // `viewFocused` callback are shared across families.
+        let owned = match self.platform {
+            ViewPlatform::Android => matches!(
+                call.method.as_str(),
+                view_methods::CREATE
+                    | view_methods::TOUCH
+                    | view_methods::SET_DIRECTION
+                    | view_methods::CLEAR_FOCUS
+                    | view_methods::RESIZE
+                    | view_methods::OFFSET
+                    | view_methods::REJECT_GESTURE
+                    | view_methods::DISPOSE
+                    | view_methods::VIEW_FOCUSED
+            ),
+            ViewPlatform::Darwin => matches!(
+                call.method.as_str(),
+                view_methods::CREATE
+                    | view_methods::TOUCH
+                    | view_methods::ACCEPT_GESTURE
+                    | view_methods::REJECT_GESTURE
+                    | view_methods::DISPOSE
+                    | view_methods::VIEW_FOCUSED
+            ),
+        };
+        if !owned {
+            return Reply::PlatformError {
+                code: error_codes::UNIMPLEMENTED.to_owned(),
+                message: Some(format!(
+                    "{} does not implement {}",
+                    self.platform.as_str(),
+                    call.method
+                )),
+                details: Value::Null,
+            };
         }
         let target = match handle(&call.arguments) {
             Ok(target) => target,
@@ -582,12 +673,54 @@ mod tests {
             ),
             invalid_argument("gestureId must be an integer")
         );
+        // Android has no acceptGesture operation (`:1615-1617` is Darwin).
         assert_eq!(
             call_method(
                 &mut bridge,
                 view_methods::ACCEPT_GESTURE,
                 args(&[(view_methods::ARG_ID, Value::I32(31))]),
             ),
+            Reply::PlatformError {
+                code: error_codes::UNIMPLEMENTED.to_owned(),
+                message: Some("android does not implement acceptGesture".into()),
+                details: Value::Null,
+            }
+        );
+    }
+
+    #[test]
+    fn platform_operation_sets_match_the_two_controller_families() {
+        let mut android_registry = PlatformViewRegistry::new();
+        let mut android = PlatformViewBridge::new(&mut android_registry);
+        let mut darwin_registry = PlatformViewRegistry::new();
+        let mut darwin =
+            PlatformViewBridge::for_platform(&mut darwin_registry, ViewPlatform::Darwin);
+        assert_eq!(android.platform(), ViewPlatform::Android);
+        assert_eq!(darwin.platform(), ViewPlatform::Darwin);
+
+        let id = args(&[(view_methods::ARG_ID, Value::I32(51))]);
+        // Android-only direction and offset calls are typed gaps on Darwin.
+        assert_eq!(
+            call_method(&mut darwin, view_methods::SET_DIRECTION, id.clone()),
+            Reply::PlatformError {
+                code: error_codes::UNIMPLEMENTED.to_owned(),
+                message: Some("darwin does not implement setDirection".into()),
+                details: Value::Null,
+            }
+        );
+        assert_eq!(
+            call_method(&mut android, view_methods::ACCEPT_GESTURE, id.clone()),
+            Reply::PlatformError {
+                code: error_codes::UNIMPLEMENTED.to_owned(),
+                message: Some("android does not implement acceptGesture".into()),
+                details: Value::Null,
+            }
+        );
+        // Darwin exposes the same `rejectGesture` wire name with only `id`,
+        // while Android's variant may carry `gestureId` (`:1406,1627`).
+        let darwin_reject = args(&[(view_methods::ARG_ID, Value::I32(52))]);
+        assert_eq!(
+            call_method(&mut darwin, view_methods::REJECT_GESTURE, darwin_reject),
             Reply::Success(Value::Null)
         );
     }

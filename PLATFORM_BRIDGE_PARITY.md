@@ -333,6 +333,19 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 审计基线随之再收敛：`plugins.flutter.io/camera` 被插件清单引用后不再是「已声明未接线」，`unused` 由 3 项降为 2 项（只剩 Flutter 自身也从不写出的标签 5，以及只作类型级标签的 `missing_plugin`）。审计测试同时新增「实现插件清单 vs 审计固定插件表」逐名交叉核对 1 项。无渲染、IR、解释器改动，默认态零漂移。
 
+### 第二十五轮：深度轮次 — 平台视图按端 typed 契约
+
+`src/platform_view_bridge.rs` 把统一的 `view_methods` 表细化为按平台族注入的 typed 操作集：新增 `ViewPlatform::{Android,Darwin}`、`PlatformViewBridge::for_platform` / `platform()`；每次调用在进入 handler 前先做平台归属检查，不属于宿主平台族的操作返回 typed `unimplemented`，不再静默成功。
+
+| Flutter 源码（3.50-candidate，`platform_views.dart`） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `:746-1346` — `AndroidViewController` 操作集：`touch` (`:936,1255`)、`setDirection` (`:989`)、`clearFocus` (`:1037`)、`resize` (`:1442`)、`offset` (`:1472`)、`isSurfaceControlEnabled` (`:1530`) | `ViewPlatform::Android` 操作表 | Android 调用保持通过，Darwin 上 `setDirection` 被拒 |
+| `:1579-1642` — `DarwinPlatformViewController` 仅有 `acceptGesture` (`:1617`) / `rejectGesture` (`:1627`)；`:1600-1604` 明确方向方法尚不支持 | `ViewPlatform::Darwin` 操作表 | Darwin `rejectGesture` 通过；Android `acceptGesture` 被拒 |
+| `:286,325,1386-1388` — `create`；`:1481,1517,1560,1637` — `dispose`；`:152,181,210,238,288,327` — `viewFocused` 回调 | 两族共享方法 | 共享方法在两族仍可用 |
+| `:1406,1568,1627` — Android 的 `rejectGesture` 可带 `gestureId`，Darwin 只带 `id` | 统一参数校验 + 平台族方法表 | 既有 `gestureId` 整数测试与 Darwin `rejectGesture` 测试同时通过 |
+
+默认构造仍为 Android，保持既有调用方行为；无渲染、IR、解释器改动，默认态零漂移。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
