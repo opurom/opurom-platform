@@ -198,6 +198,21 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 `bridge_fuzz_matrix` 新增 `standard_and_json_paths_agree_on_logical_values`：对 Null/bool/I32/I64/F64/String/List/Map 等共享 JSON 表示的值，验证 StandardMessageCodec 与 JSONMessageCodec 编解码往返逻辑一致；按 Dart 单一 `int` 类型（`message_codecs.dart:97,391-397`）将可落入 I32 的 I64 归一化后比较，避免把合法表示差异误判为跨端漂移。默认态零漂移，无 IR/渲染改动。
 
+### 第十九轮：深度轮次 — 插件生态规范审计
+
+`src/plugin_registry.rs` 新增纯函数 manifest 审计（4 项单测），只校验声明、不编辑文件、不加载插件代码、不注册运行时 handler：
+
+| Flutter 源码（3.50-candidate） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `flutter_tools/lib/src/commands/create_base.dart:731,735-804,811-813` — `[a-z_][a-z0-9_]*` 且不能是 Dart 关键字 | `is_valid_package_name` + `DART_KEYWORDS` 静态表 | 合法下划线名通过；`class`、大写、连字符、空串被拒 |
+| `flutter_tools/lib/src/flutter_plugins.dart:142-145` — 插件 `environment.flutter` 版本约束 | `minimum_flutter_version` 只接受明确的 `>= X.Y.Z`，其他形状返回 `None` | 2.11.0/2.10.0 解析正确，`any` 不猜测 |
+| `flutter_tools/lib/src/plugins.dart:1900-1910` + `flutter_plugins.dart:1904-1908` — 桌面自实现需要 Flutter ≥ 2.11.0 | `desktop_self_impl_allowed` + `audit_manifests` 的 linux/macos/windows 门槛 | 无约束/2.10 被拒，2.11 通过；Android 不受该门槛限制 |
+| `flutter_tools/lib/src/plugins.dart:203` — `implements` 指向 app-facing 接口；`flutter_plugins.dart:1985-1995` — 候选接口必须可解析 | `with_interface` / `implements_package` + 未知接口拒绝 | 未声明的 `camera` 接口被拒 |
+| 同一接口的版本一致性（Opurom manifest 的 `interface` 对） | app-facing 与实现端版本必须逐字一致 | `1.0.0` 对 `2.0.0` 被拒 |
+| `flutter_plugins.dart:1950-1995` — 多候选实现需要明确选择，不能静默歧义 | 同接口同平台的第二个实现被 `AmbiguousImplementation` 拒绝 | linux 上 `camera`/`camera_alt` 冲突被拒 |
+
+`RegistryError` 增加 `Manifest(ManifestError)` 变体；`ManifestError` 的类型化原因可显示且可作为 `std::error::Error`。无渲染、IR、解释器改动，默认态零漂移。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
