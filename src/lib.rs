@@ -809,8 +809,12 @@ pub fn desktop_support() -> Vec<DesktopSupport> {
 
 // Flutter-compatible platform channel codec and named-channel contract.
 pub mod platform_channel;
+// Framework-level codecs, lifecycle wire and platform method names.
+pub mod framework_channels;
 // Unified high-frequency native capability contract.
 pub mod native_capabilities;
+// Host backends for preferences and path provider.
+pub mod native_backends;
 // Unified system event taxonomy and dispatcher.
 pub mod system_events;
 // Deterministic plugin registration contract.

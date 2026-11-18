@@ -224,7 +224,7 @@ fn headless_rejects_wrong_frame_length() {
         before,
         "a rejected frame never mutates state"
     );
-    assert_eq!(host.frame().pixels, &[]);
+    assert!(host.frame().pixels.is_empty());
 
     assert_eq!(host.present(frame(2, 1, &[0u8; 8])), Ok(()));
     assert_ne!(host.digest(), before);

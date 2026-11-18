@@ -2,7 +2,7 @@
 
 责任模块：模块五「原生能力桥接体系」。
 Flutter 版本：**3.50-candidate**，engine `371f77202a73e8dff57a8b3bff75bca55c090aee`（本地 `flutter-golden`）。
-插件快照：`flutter-plugins` @ `557d3284ac9dda32a1106bb75be8a23bdccd2f96`。
+插件快照：`flutter-plugins` at `557d3284ac9dda32a1106bb75be8a23bdccd2f96`。
 实现仓库：`opurom-platform`（独立 git 仓库，HEAD 起点 `f71bc18`）。
 
 架构红线：IR 唯一真相源、编译期全量降级、运行时零解释、确定性渲染。
@@ -55,16 +55,30 @@ Flutter 版本：**3.50-candidate**，engine `371f77202a73e8dff57a8b3bff75bca55c
 
 测试：6 项，覆盖依赖排序、确定性环打破、能力重复拒绝、非插件依赖过滤、平台过滤、权限并集。
 
-## 五、验证与 CI
+## 五、第二轮：框架通道与真实后端（P0 自动接续）
+
+| Flutter 源码（3.50-candidate） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `services/message_codecs.dart:44-62` `StringCodec` 原始 UTF-8 | `encode_lifecycle_message` / `parse_lifecycle_message` | 五态字符串逐字对齐 `AppLifecycleState.*`，未知值拒绝 |
+| `services/message_codecs.dart:88-114,120-200` `JSONMessageCodec` / `JSONMethodCodec` 的 call map、success/error envelope | `src/framework_channels.rs` 全套 JSON 编解码 | 6 项单测：形状字节、尾随 JSON、错误四元组、与标准编解码并存 |
+| `services/binding.dart:448-457` 生命周期字符串 + `scheduler/binding.dart:416-430` 帧门控 | `lifecycle_message` / `lifecycle_transitions` / `lifecycle_frames_enabled` | 五态往返、中间态序列、帧开关逐态断言 |
+| `services/binding.dart:174-182` 唯一 `memoryPressure` 事件 | `SYSTEM_EVENT_MEMORY_PRESSURE` | 字符串常量断言 |
+| `clipboard.dart:32-68`、`haptic_feedback.dart:19-152`、`editable_text.dart:3037`、`system_navigator.dart:65`、`binding.dart:525,588`、`system_chrome.dart:651-762` | `platform_methods` 冻结方法名与参数键 | 震动八种类型归一为单一 `HapticFeedback.vibrate`，常量逐字断言 |
+| `shared_preferences/lib/shared_preferences.dart:17,59-158` + `method_channel_shared_preferences.dart:11-38` | `PreferencesBackend`：`flutter.` 前缀、五类类型化值、`getKeys`/`remove`/`clear`/`commit`/`reload` | 4 项单测：五类型往返、类型不匹配拒绝、CapabilityTable 接入、键前缀 |
+| `path_provider_platform_interface/lib/src/method_channel_path_provider.dart:15-78` + Linux/macOS/Windows 官方实现 | `PathResolver`：七方法 + 平台可用性 + 注入根路径 | 单测覆盖 Linux 可用集、macOS Library、typed unimplemented、CapabilityTable 接入 |
+
+追加机制规则：`serde_json = "=1.0.154"` 与核心仓同版本锁定，仅用于 JSON 框架通道与类型化偏好值；测试断言中 `&[]` 改为 `.is_empty()` 避免 serde_json 的 `PartialEq` 歧义。
+
+## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 全量所有测试组通过（最后一组统计：79 个单元测试 + 各集成测试组，共 24 组 `test result: ok`），rustfmt 无漂移。
-- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）；模块内单测位于对应 `src/*.rs`；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
+- 结果：2026-11-18 两轮全量通过；第二轮新增 `framework_channels` 6 项与 `native_backends` 4 项模块单测，合计 89 个库单测 + 23 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0）。
+- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）；新增模块内单测 10 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
-## 六、剩余 GAP（不得自行降标，按优先级继续）
+## 七、剩余 GAP（不得自行降标，按优先级继续）
 
 1. **设备信息/网络/权限/分享**：本地 `flutter-plugins` 快照无官方插件源码，按硬约束不能自创 API；需先取到 pinned 官方源码再实现。已用 typed `unimplemented` 占位，不伪造成功。
-2. **真实宿主后端**：`preferences`/`path_provider`/`url_launcher`/`image_picker` 目前只有方法契约，未接各端原生实现；需与 mobile/web/desktop 各宿主对接。
+2. **真实宿主后端**：`PreferencesBackend` 与 `PathResolver` 已落地并接入 `CapabilityTable`；`url_launcher`/`image_picker` 仍只有方法契约，需与 mobile/web/desktop 各宿主对接。
 3. **系统事件生产者**：`SystemEventDispatcher` 只做分发；宿主侧键盘/旋转/亮度/省电/刷新率的 OS 信号采集尚未接入。
 4. **插件注册执行端**：`RegistrationPlan` 是冻结计划；`opurom-plugins` CLI 与 `opurom-cli` 各端工程生成尚未消费该计划。
 5. **跨仓库对齐**：`opurom-runtime-adapters` 的 9 类能力码与此处 12 类契约尚未统一命名，需 adapters 侧协同（本模块不修改他仓库代码）。

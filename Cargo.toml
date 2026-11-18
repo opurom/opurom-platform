@@ -8,6 +8,7 @@ description = "Opurom platform adapter ABI, capability registry and host adapter
 sha2 = "0.10.9"
 aes-gcm = "0.10.3"
 getrandom = "0.2.15"
+serde_json = "=1.0.154"
 
 [dev-dependencies]
 # Tests encode/decode PNG fixtures on every host; the library itself needs
