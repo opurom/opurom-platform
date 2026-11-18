@@ -154,7 +154,7 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）
 
-1. **设备信息/网络/权限/分享**：本地 `flutter-plugins` 快照无官方插件源码，按硬约束不能自创 API；需先取到 pinned 官方源码再实现。已用 typed `unimplemented` 占位，不伪造成功。
+1. **设备信息/网络/权限/分享**：`Share.invoke` 框架方法名已在 `framework_channels` 冻结；设备信息/网络/权限因本地 `flutter-plugins` 快照无官方插件源码，按硬约束不自创 API，保持 typed `unimplemented`。
 2. **真实宿主后端**：`PreferencesBackend`、`PathResolver`、`UrlLauncherBackend`、`ImagePickerBackend` 均已落地并接入 `CapabilityTable`；macOS 生命周期观察者已接入；各端原生 opener/picker 表面仍需 mobile/web/desktop 宿主注入实现。
 3. **系统事件生产者**：纯函数生产者已落地（`event_producers.rs`）；宿主侧 OS 信号采集点（Android/iOS 原生回调）尚未接入，需各宿主注入。
 4. **插件注册执行端**：`RegistrationPlan` 是冻结计划；`opurom-plugins` CLI 与 `opurom-cli` 各端工程生成尚未消费该计划。
