@@ -181,3 +181,77 @@ fn failed_injection_does_not_mutate_dispatch_state() {
         "failure reply must not gain clock/state data"
     );
 }
+
+#[test]
+fn registration_failures_are_typed_isolated_and_replayable() {
+    use opurom_platform::plugin_executor::{execute_plan, RegistrationFn, StepOutcome};
+    use opurom_platform::plugin_registry::{resolve_registration, PluginManifest, RegistryError};
+
+    // Flutter's generated registrant is built from declarations that must be
+    // resolvable (`flutter_plugins.dart:480-498`); a duplicate plugin name
+    // cannot produce a registration plan (`flutter_plugins.dart:528-551`).
+    let duplicates = vec![
+        PluginManifest::new("camera", "1.0.0"),
+        PluginManifest::new("camera", "2.0.0"),
+    ];
+    assert!(matches!(
+        resolve_registration(&duplicates, Some("android")),
+        Err(RegistryError::DuplicatePlugin(name)) if name == "camera"
+    ));
+
+    let manifests = vec![
+        PluginManifest::new("camera", "1.0.0").on_platform("android"),
+        PluginManifest::new("path", "1.0.0")
+            .on_platform("android")
+            .depends_on("camera"),
+        PluginManifest::new("share", "1.0.0").on_platform("android"),
+    ];
+    let plan = resolve_registration(&manifests, Some("android")).unwrap();
+    assert_eq!(plan.names(), vec!["camera", "path", "share"]);
+
+    // Per-plugin try/catch: the `path` host surface fails while `camera` and
+    // `share` still register, and the frozen plan is unchanged.
+    fn ok() -> Result<(), &'static str> {
+        Ok(())
+    }
+    fn fail() -> Result<(), &'static str> {
+        Err("host surface unavailable")
+    }
+    let functions = [
+        RegistrationFn {
+            name: "camera",
+            function: ok,
+        },
+        RegistrationFn {
+            name: "path",
+            function: fail,
+        },
+        RegistrationFn {
+            name: "share",
+            function: ok,
+        },
+    ];
+    let permissions = BTreeMap::from([
+        ("camera", vec!["android.permission.CAMERA"]),
+        ("path", vec!["android.permission.READ_EXTERNAL_STORAGE"]),
+        ("share", vec!["android.permission.INTERNET"]),
+    ]);
+    let first = execute_plan(&plan, &functions, &manifests, &permissions, "android");
+    let second = execute_plan(&plan, &functions, &manifests, &permissions, "android");
+    assert_eq!(first, second, "failure path must be deterministic");
+    assert_eq!(first.registered(), vec!["camera", "share"]);
+    assert_eq!(first.failed(), vec!["path"]);
+    assert_eq!(
+        first.outcomes()[1].1,
+        StepOutcome::Failed {
+            reason: "host surface unavailable".into()
+        }
+    );
+    assert!(!first.all_registered());
+    assert!(first.permissions().contains("android.permission.CAMERA"));
+    assert!(first.permissions().contains("android.permission.INTERNET"));
+    assert!(!first
+        .permissions()
+        .contains("android.permission.READ_EXTERNAL_STORAGE"));
+    assert_eq!(plan.names(), vec!["camera", "path", "share"]);
+}

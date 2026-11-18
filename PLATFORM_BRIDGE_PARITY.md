@@ -377,6 +377,10 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 所有 19 条通道在三个编码/解码入口（消息、方法调用、错误信封）都返回 `Unsupported("channel has no bridge route")`；`StringCodec` 仍只属于已桥接的生命周期通道。无渲染、IR、解释器改动，默认态零漂移。
 
+### 第二十六轮：深度轮次 — 宿主注入失败路径收敛
+
+`tests/host_injection_failure_paths.rs` 新增 `registration_failures_are_typed_isolated_and_replayable`：重复 manifest 名无法生成注册计划；冻结计划中注入 `path` 宿主面失败时，`camera`/`share` 仍注册，权限集合只合并成功插件；重复执行得到完全一致报告，计划本身不变。源码依据 `flutter_tools/lib/src/flutter_plugins.dart:480-498,528-551`（按平台生成与逐插件 try/catch）、`:380-420`（权限并集）。无渲染、IR、解释器改动，默认态零漂移。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
