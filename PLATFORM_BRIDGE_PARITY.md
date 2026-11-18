@@ -229,6 +229,19 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 - `framework_channels::unimplemented` 以预分配 `Vec` + `String::from_utf8` 构造诊断消息，替代 `format!` 的格式化 machinery；保留 `platform_channel.dart:350-366` 的 null-reply / `unimplemented` 错误语义，新增测试逐字段断言消息并做 envelope 往返。
 - 新增 2 项测试（字符串键身份、unimplemented envelope 往返）。无渲染、IR、解释器改动，默认态零漂移。
 
+### 第二十二轮：深度轮次 — 截断尺寸与递归溢出边界
+
+`tests/bridge_fuzz_matrix.rs` 新增 `codec_rejects_truncated_sizes_and_nested_recursion_overflow`（1 项）：
+
+| Flutter 源码（3.50-candidate） | 边界输入 | 断言 |
+| --- | --- | --- |
+| `message_codecs.dart:275-281,545-562` — 0xFE/0xFF 扩展尺寸头部必须完整 | 0xFE 后缺长度字节；0xFF 后仅 2 字节长度 | `decode_message` 返回 typed `Corrupt`，不 panic、不猜测尺寸 |
+| `message_codecs.dart:470-476` — map 的 key/value 成对写入 | `[13, 1, 7, 1, 'a']`（有 key 无 value） | 拒绝半条 map 项 |
+| `message_codecs.dart:452-457` — list 长度受 buffer 约束 | `[12, 255, 0xff, 0xff, 0xff, 0xff]` 声明 4G 长度 | 拒绝超长 list，不做容量分配 |
+| `readValue` 递归深度保护（`message_codecs.dart:379-385`） | 129/140 层嵌套 List | 深度 128 通过；129 与 140 层被 typed 拒绝 |
+
+本轮只补确定性、可重放的畸形输入测试，不改实现；默认态零漂移，不触碰 IR/渲染/解释器。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。

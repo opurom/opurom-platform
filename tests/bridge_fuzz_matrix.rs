@@ -63,6 +63,55 @@ fn json_codec_never_panics_on_bounded_text_matrix() {
 }
 
 #[test]
+fn codec_rejects_truncated_sizes_and_nested_recursion_overflow() {
+    use opurom_platform::platform_channel::encode_message;
+
+    // A declared 254/255 size must be followed by the full 2/4-byte length
+    // and the payload; truncated headers are FormatException inputs
+    // (`message_codecs.dart:275-281,545-562`).
+    let declared_f32 = [7u8, 254, 0x40, 0x00];
+    assert!(decode_message(Some(&declared_f32)).is_err());
+    // The 255 (u32) size header needs four length bytes plus payload; with
+    // only two length bytes the reader must reject the truncated header.
+    let declared_f64 = [7u8, 255, 0x00, 0x00];
+    assert!(decode_message(Some(&declared_f64)).is_err());
+    let declared_i64 = [4u8, 255, 0x01];
+    assert!(decode_message(Some(&declared_i64)).is_err());
+    // A map entry with a key but no value must not yield a half entry
+    // (`message_codecs.dart:470-476` writes key/value pairs atomically).
+    let half_map = [13u8, 1, 7, 1, b'a'];
+    assert!(decode_message(Some(&half_map)).is_err());
+    // A list length beyond the buffer must not be trusted
+    // (`message_codecs.dart:452-457`).
+    let long_list = [12u8, 255, 0xff, 0xff, 0xff, 0xff];
+    assert!(decode_message(Some(&long_list)).is_err());
+
+    // Nested values past 128 levels are rejected before the reader can
+    // recurse further (`decodeMessage` readValue depth limit
+    // `message_codecs.dart:379-385` guards the same corruption class).
+    let mut nested = Value::Null;
+    for _ in 0..140 {
+        nested = Value::List(vec![nested]);
+    }
+    let bytes = encode_message(&nested).unwrap().unwrap();
+    assert!(decode_message(Some(&bytes)).is_err());
+    // Exactly 129 levels is also beyond the limit.
+    let mut nested = Value::Null;
+    for _ in 0..129 {
+        nested = Value::List(vec![nested]);
+    }
+    let bytes = encode_message(&nested).unwrap().unwrap();
+    assert!(decode_message(Some(&bytes)).is_err());
+    // 128 levels is accepted.
+    let mut nested = Value::Null;
+    for _ in 0..128 {
+        nested = Value::List(vec![nested]);
+    }
+    let bytes = encode_message(&nested).unwrap().unwrap();
+    assert_eq!(decode_message(Some(&bytes)).unwrap(), nested);
+}
+
+#[test]
 fn standard_and_json_paths_agree_on_logical_values() {
     use opurom_platform::framework_channels::{decode_json_message, encode_json_message};
     use opurom_platform::platform_channel::{decode_message, encode_message};
