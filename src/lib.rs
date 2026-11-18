@@ -829,3 +829,5 @@ pub mod plugin_registry;
 pub mod plugin_executor;
 // Platform-view method-channel bridge.
 pub mod platform_view_bridge;
+// Background-isolate messaging contract.
+pub mod background_tasks;

@@ -135,10 +135,21 @@ macOS 通知映射（`objc2-app-kit` 0.3.2 静态通知名）：
 
 实现严守 `PlatformViewRegistry` 的单向生命周期（created→attached→resized→input-forwarded→disposed）：create 自动推进到 attached，首次 touch 前补 resize，输入后 resize 为幂等 size ack，dispose 可查询但不再接收输入。无运行时视图对象树，未触碰 IR。
 
+### 第九轮：后台任务消息契约（P2 第二项）
+
+| Flutter 源码（3.50-candidate） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `services/binding.dart:115-122` — `rootIsolateToken` 用于后台 isolate 协调 | `RootToken` 非零 u64 不透明令牌 | 零值拒绝、初始化幂等 |
+| `services/_background_isolate_binary_messenger_io.dart:15-63` — `ensureInitialized` 幂等 | `BackgroundMessenger::ensure_initialized` | 第二 token 不重置序号与 pending |
+| `:76-89` — 单调递增 message identifier 与 receive-port 回复 | `send` 分配序号 + `reply`/`take_reply` 按序号关联 | 序号单调、未知 id 拒绝、回复精确取出 |
+| `:92-96` — 后台 isolate 不支持 `setMessageHandler` | `set_message_handler_unsupported` typed 错误 | 断言 `unimplemented` |
+
+GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后台 isolate 的平台通道机制；Opurom 只平移该机制，宿主原生调度器（Android WorkManager/iOS BGTask 等）按各端原生机制注入，不自创 API。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 八轮全量通过；第八轮新增原生视图桥接 2 项单测，合计 105 个库单测 + 23 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0）。
+- 结果：2026-11-18 九轮全量通过；第九轮新增后台任务契约 4 项单测，合计 109 个库单测 + 23 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0）。
 - 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）；新增模块内单测 10 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）
