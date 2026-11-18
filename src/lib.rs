@@ -819,5 +819,7 @@ pub mod native_capabilities;
 pub mod native_backends;
 // Unified system event taxonomy and dispatcher.
 pub mod system_events;
+// Pure host-signal to system-event producers.
+pub mod event_producers;
 // Deterministic plugin registration contract.
 pub mod plugin_registry;
