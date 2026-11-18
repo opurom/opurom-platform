@@ -41,7 +41,12 @@ unsafe fn url_handler(_state: *mut u8, call: &MethodCall) -> Reply {
 
 #[test]
 fn all_capabilities_are_declared_in_stable_order() {
-    assert_eq!(ALL_CAPABILITIES.len(), 12);
+    assert_eq!(ALL_CAPABILITIES.len(), 14);
+    assert_eq!(Capability::from_str("camera"), Some(Capability::Camera));
+    assert_eq!(
+        Capability::from_str("video_player"),
+        Some(Capability::VideoPlayer)
+    );
     assert_eq!(ALL_CAPABILITIES[0], Capability::Preferences);
     assert_eq!(
         Capability::from_str("preferences"),

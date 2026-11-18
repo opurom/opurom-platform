@@ -107,10 +107,19 @@ macOS 通知映射（`objc2-app-kit` 0.3.2 静态通知名）：
 
 新增 `src/event_producers.rs`（237 行）：全部为纯函数（无时钟、无随机、无隐藏状态），从原始 OS 事实到封闭事件值的确定性映射；折叠姿态投影复用 `display_geometry` 的尺寸规则；DPI 换算走共享 `DPI_UNIT` 定点网格。6 项单测覆盖索引顺序、尺寸投影、姿态投影、wire 往返、payload 精确性。
 
+### 第六轮：媒体能力补齐（P1 第二项）
+
+| Flutter 源码（3.50-candidate，flutter-plugins @ 557d3284） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `camera_platform_interface/lib/src/method_channel/method_channel_camera.dart:17,94-354` — `plugins.flutter.io/camera` 与 11 个方法、参数键 | `camera_methods` 模块 + `CameraBackend` 注入式处理器 | 2 项单测：方法全集、`cameraId` 校验、`create` 特殊路径、CapabilityTable 接入 |
+| `video_player_platform_interface/lib/video_player_platform_interface.dart:42-102` + Android `VideoPlayerPlugin.java:114-210` — 11 个播放器方法与 native `position` 命名 | `video_methods` 模块 + `VideoPlayerBackend` | 2 项单测覆盖上述场景 |
+
+`Capability` 由 12 类扩展至 14 类（新增 `Camera` / `VideoPlayer`），方法与参数均取自 pinned 源码；宿主无处理器时返回 typed `unimplemented`。架构红线不破：无运行时对象树、无解释器、IR 未触碰。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 五轮全量通过；第五轮新增系统事件生产者 6 项单测，合计 98 个库单测 + 23 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0）。
+- 结果：2026-11-18 六轮全量通过；第六轮新增媒体能力 2 项单测，合计 100 个库单测 + 23 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0）。
 - 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）；新增模块内单测 10 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）

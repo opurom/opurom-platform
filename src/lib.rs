@@ -817,6 +817,8 @@ pub mod framework_channels;
 pub mod native_capabilities;
 // Host backends for preferences and path provider.
 pub mod native_backends;
+// Media capability contract: camera and video playback.
+pub mod media_capabilities;
 // Unified system event taxonomy and dispatcher.
 pub mod system_events;
 // Pure host-signal to system-event producers.

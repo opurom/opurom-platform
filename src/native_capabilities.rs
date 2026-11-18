@@ -72,6 +72,10 @@ pub enum Capability {
     Clipboard,
     /// haptic feedback. Framework `services/haptic_feedback.dart:29-33`.
     Haptics,
+    /// camera capture (`camera` plugin, pinned local source).
+    Camera,
+    /// video playback (`video_player` plugin, pinned local source).
+    VideoPlayer,
 }
 
 impl Capability {
@@ -89,6 +93,8 @@ impl Capability {
             Capability::Share => "share",
             Capability::Clipboard => "clipboard",
             Capability::Haptics => "haptics",
+            Capability::Camera => "camera",
+            Capability::VideoPlayer => "video_player",
         }
     }
 
@@ -106,6 +112,8 @@ impl Capability {
             "share" => Self::Share,
             "clipboard" => Self::Clipboard,
             "haptics" => Self::Haptics,
+            "camera" => Self::Camera,
+            "video_player" => Self::VideoPlayer,
             _ => return None,
         })
     }
@@ -130,7 +138,7 @@ impl Capability {
 }
 
 /// All declared capabilities in stable order.
-pub const ALL_CAPABILITIES: [Capability; 12] = [
+pub const ALL_CAPABILITIES: [Capability; 14] = [
     Capability::Preferences,
     Capability::PathProvider,
     Capability::UrlLauncher,
@@ -143,6 +151,8 @@ pub const ALL_CAPABILITIES: [Capability; 12] = [
     Capability::Share,
     Capability::Clipboard,
     Capability::Haptics,
+    Capability::Camera,
+    Capability::VideoPlayer,
 ];
 
 /// Method names for `preferences`, from `shared_preferences.dart:66-158`.
@@ -317,6 +327,8 @@ pub fn methods_for(capability: Capability) -> &'static [&'static str] {
         Capability::UrlLauncher => url_methods::all(),
         Capability::ImagePicker => image_methods::all(),
         Capability::DeviceInfo => device_info_methods::all(),
+        Capability::Camera => crate::media_capabilities::camera_methods::all(),
+        Capability::VideoPlayer => crate::media_capabilities::video_methods::all(),
         Capability::Clipboard => &["getData", "hasStrings", "setData"],
         Capability::Haptics => &[
             "vibrate",
