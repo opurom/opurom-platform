@@ -305,16 +305,14 @@ impl<'a> PlatformViewBridge<'a> {
                     Some(value) => value,
                     None => return invalid_argument("touch requires y"),
                 };
-                let state = match self.registry.view(target) {
-                    Ok(state) => state,
+                let (lifecycle, bounds) = match self.registry.view(target) {
+                    Ok(state) => (state.lifecycle, state.bounds),
                     Err(error) => return map_error(error),
                 };
-                if state.lifecycle == crate::platform_view::ViewLifecycle::Attached {
-                    if let Err(error) = self.registry.resize(
-                        target,
-                        ViewBounds::new(0, 0, state.bounds.width, state.bounds.height)
-                            .expect("registered bounds stay valid"),
-                    ) {
+                if lifecycle == crate::platform_view::ViewLifecycle::Attached {
+                    // The registered bounds came from `ViewBounds::new`, so
+                    // the typed value can be reused without revalidation.
+                    if let Err(error) = self.registry.resize(target, bounds) {
                         return map_error(error);
                     }
                 }

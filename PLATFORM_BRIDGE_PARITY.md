@@ -186,10 +186,14 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 `SystemEventDispatcher` 增加 `emit_host_event` 便捷入口；新增 1 项端到端测试，把 `event_producers` 的六类宿主信号（memoryPressure/keyboard/orientation/brightness/power/refreshRate）生成后逐项接入分发器，验证订阅 slot 稳定、同值同 kind 去重、同 kind 新值仍送达。源码依据：services/binding.dart:174-182（唯一框架事件）、system_channels.dart:599（键盘）、system_chrome.dart:43-70（朝向索引）、binary_messenger.dart:66-80（单 handler 语义）。不触碰渲染/IR/解释器，默认态零漂移。
 
+### 第十六轮：深度轮次 — 生产路径无 panic 审计
+
+对新增桥接模块逐文件审计生产路径中的 `unwrap/expect/panic/todo/unimplemented!`：唯一命中为 `platform_view_bridge` 转发输入前的 bounds 重建 `expect`，已改为复用注册时已验证的 `ViewBounds` 值，不再有生产路径 panic。测试中的 `unwrap` 保留，用于断言失败时快速暴露回归。源码依据：`services/platform_views.dart:286-1517` 的 create/resize/touch 参数形状；`platform_view.rs` 的严格生命周期。全量门禁仍绿，默认态零漂移。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 十五轮本地全量通过；第十五轮新增端到端事件链 1 项单测，合计 123 个库单测 + 24 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
+- 结果：2026-11-18 十六轮本地全量通过；第十六轮移除生产路径最后一个 `expect`，合计 123 个库单测 + 24 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
 - 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）；新增模块内单测 10 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）
