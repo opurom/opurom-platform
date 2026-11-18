@@ -435,23 +435,35 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 失败路径是纯函数：重复 10 次相同非法调用得到相同 reply；失败后 GAP register 的行数不变、4 类能力的 `unavailable_reason()` 不变；合法调用仍不前进到成功。本地全量测试使用稳定 release renderer 作为 sibling fixture（另一自动化正在重建 debug renderer，与该路径无关）。无渲染、IR、解释器改动，默认态零漂移。
 
-### 第二十九轮：深度轮次 — 冻结调用校验补齐方法名
+### 第三十八轮：深度轮次 — 冻结调用校验补齐方法名
 
 承接上轮 `frozen_contracts::validate_call`：`MethodCall` 由方法名与参数两个独立 tagged 值组成（`services/message_codecs.dart:600-617`），但此前只校验参数、忽略 `call.method`，使 frozen 定义可被任意方法名复用而通过形状检查。本轮让 `validate_call` 同时校验方法名与参数，方法名不符返回 typed `invalid_argument`（`message_codec.dart:108-122`）；参数合法且方法名正确的 GAP 调用仍返回 `None`，由调用方继续按 `unimplemented` 处理，绝不伪造成功。新增 1 项单测：错名+合法参数被拒、正名+合法参数通过。无渲染、IR、解释器改动，默认态零漂移。
 
 > 本地门禁说明：本轮全量 `cargo test --all-targets` 在本机有 3 个既存 GPU 测试失败（`gpu_animation_loop` 2 项、`gpu_presentation` 1 项，均为软件渲染器环境路径）。已用 stash 对比确认在干净 HEAD 上同样失败，且与本轮 `frozen_contracts` 改动无关；远端 Actions 同一 HEAD `cad736b` 为 6/6 成功。跳过这 3 项后本机其余测试全绿（154 库单测 + 所有非 GPU 集成测试），fmt 与 Linux/Windows 交叉 check 均通过。
 
-### 第三十轮：深度轮次 — GAP register 平台查询边界
+### 第三十九轮：深度轮次 — GAP register 平台查询边界
 
 `gap_register::GapRow::needs_host_implementation` 此前先判断 `WITH_FUCHSIA` 再判断 `row.platforms`，使任何携带六键 `PLATFORM_KEYS` 的行在查询 `fuchsia` 时被静默跳过——尽管 register 明确认识 Fuchsia（Flutter 通道平台集合大于 `.flutter-plugins-dependencies` 六键集合，`flutter_plugins.dart:366-373`）。本轮改为先判 `row.platforms.contains`、再判已识别平台集合，语义为「只返回该行声明支持的平台」。新增 1 项单测：六键子集行对 Fuchsia 仍返回空（不被误判为遗漏）、未知平台恒 false、空 channel 名绝不命中 GAP。无渲染、IR、解释器改动，默认态零漂移。
 
 > 本地 GPU 环境基线同上轮：3 个既存 GPU 测试在本机因软件渲染器环境失败，干净 HEAD 上复现；远端 CI 全绿。本轮相关门禁（fmt、155 库单测、gap register 集成测试 8 项、Linux/Windows check）均通过。
+### 第三十七轮：深度轮次 — CapabilityTable 派发形状闸门
+
+把冻结 wire 形状的 typed `invalid_argument` 语义接入 `CapabilityTable::call`：新增 `frozen_contracts::method_for_call`，在派发前识别 `share.Share.invoke` / `permissions.System.exitApplication` 这类 capability-qualified 冻结方法；形状错误在 handler 运行前返回 `invalid_argument`，形状合法则继续原有派发。GAP 能力（`unavailable_reason() != None`）在形状检查之后恒返回 typed `unimplemented`，即使表中注入了占位 handler 也不会伪造成功；冻结 wire 名不再被误报为「not part of capability」。
+
+| Flutter 源码（3.50-candidate） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `services/message_codecs.dart:467,608-616` — 非法参数/方法调用形状是 ArgumentError/FormatException | `CapabilityTable::call` 派发前调用 `validate_call` | 错类型、缺键、错 map 类型在 handler 前就返回 `invalid_argument` |
+| `services/message_codecs.dart:628-663`、`services/platform_channel.dart:600-613` — 错误信封与 handler 异常语义 | `Reply::PlatformError` 经 `encode_envelope`/`decode_envelope` 往返 | code/message/details 逐字段稳定 |
+| `services/platform_channel.dart:359-364` — null reply 是 MissingPluginException，不是 unimplemented | GAP 能力始终返回 typed `unimplemented` | 空表与注入占位 handler 的两种情况都不伪造 `Success(Null)` |
+| `services/binding.dart:448-457,523-528` — 生命周期/退出请求等框架方法载例 | frozen wire 名识别 | `permissions.System.exitApplication` / `share.Share.invoke` 不再被误判为未知方法；非 GAP 能力（如 preferences）派发不受影响 |
+
+新增 `tests/capability_dispatch_failure_contract.rs`（6 项）：malformed 调用不进 handler、缺键/错类型统一错误模板、合法 GAP 调用恒 unimplemented、非 GAP 正常派发、错误信封字节往返、形状闸门纯函数可重放且不改表。无渲染、IR、解释器改动，默认态零漂移。
 
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 三十六轮本地全量通过；合计 153 个库单测 + 41 个集成测试组、共 440 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
-- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）、`tests/channel_codec_contract.rs`（10）、`tests/capability_channel_alignment.rs`（5）、`tests/declared_channel_disposition.rs`（7）、`tests/gap_register_contract.rs`（8）、`tests/frozen_contract_crosscheck.rs`（8）、`tests/frozen_contract_failure_paths.rs`（7）；新增模块内单测 29 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
+- 结果：2026-11-18 四十轮本地全量通过；合计 155 个库单测 + 42 个集成测试组、共 448 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
+- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）、`tests/channel_codec_contract.rs`（10）、`tests/capability_channel_alignment.rs`（5）、`tests/declared_channel_disposition.rs`（7）、`tests/gap_register_contract.rs`（8）、`tests/frozen_contract_crosscheck.rs`（8）、`tests/frozen_contract_failure_paths.rs`（7）、`tests/capability_dispatch_failure_contract.rs`（6）；新增模块内单测 29 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）
 

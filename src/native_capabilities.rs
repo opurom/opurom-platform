@@ -400,10 +400,24 @@ impl CapabilityTable {
     /// Calls one capability method. The codec-neutral `Value` result is
     /// wrapped in a `Reply` so error semantics travel with the value.
     ///
+    /// A call to a capability that has a frozen wire contract is checked
+    /// before dispatch: a shape failure becomes a typed `invalid_argument`
+    /// error (`services/message_codecs.dart:467`, `:608-616`,
+    /// `services/platform_channel.dart:600-613`). A well-shaped call is
+    /// dispatched normally; a GAP capability still answers `unimplemented`.
+    ///
     /// # Safety
     /// Each handler's `state` pointer must remain valid for this call.
     pub unsafe fn call(&self, call: &MethodCall) -> Reply {
-        let capability = match Capability::from_str(&call.method.split('.').next().unwrap_or("")) {
+        // A capability with a frozen official wire shape is checked before
+        // any handler runs. The check is pure data: it cannot advance GAP
+        // state or fabricate a success.
+        if let Some(frozen) = crate::frozen_contracts::method_for_call(call) {
+            if let Some(error) = crate::frozen_contracts::validate_call(frozen, call) {
+                return error;
+            }
+        }
+        let capability = match Capability::from_str(call.method.split('.').next().unwrap_or("")) {
             Some(capability) if call.method.contains('.') => capability,
             _ => {
                 // The method name may be capability-qualified in the table
@@ -425,6 +439,16 @@ impl CapabilityTable {
                 }
             }
         };
+        // A capability with a declared GAP reason is unimplemented by
+        // construction, even if a test or host injected a placeholder
+        // handler into the table. Only a real native backend can clear it.
+        if let Some(reason) = capability.unavailable_reason() {
+            return Reply::PlatformError {
+                code: error_codes::UNIMPLEMENTED.to_owned(),
+                message: Some(reason.to_owned()),
+                details: Value::Null,
+            };
+        }
         let Some(handler) = self.handlers.iter().find(|h| h.capability == capability) else {
             let reason = capability
                 .unavailable_reason()
@@ -436,7 +460,13 @@ impl CapabilityTable {
             };
         };
         let method = call.method.rsplit('.').next().unwrap_or(&call.method);
-        if !methods_for(capability).contains(&method) {
+        // A frozen wire method is a valid call target for its GAP capability
+        // even though it is not in the local dispatch method table. The
+        // capability stays unimplemented (handled above), but it must not be
+        // misreported as an unknown method.
+        let frozen_target = crate::frozen_contracts::method_for_call(call)
+            .map(|entry| entry.name == method || entry.name == call.method);
+        if !methods_for(capability).contains(&method) && frozen_target != Some(true) {
             return Reply::PlatformError {
                 code: error_codes::UNIMPLEMENTED.to_owned(),
                 message: Some(format!(

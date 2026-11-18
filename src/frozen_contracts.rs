@@ -206,7 +206,16 @@ pub fn validate_call(method: &FrozenMethod, call: &MethodCall) -> Option<Reply> 
     // separate tagged values (`message_codecs.dart:600-617`); a host must
     // validate both. A frozen method passed the wrong name is not the
     // frozen call, even when its argument shape matches.
-    let reason = if call.method != method.name {
+    // Capability dispatch qualifies the wire name with the capability
+    // prefix (`share.Share.invoke`). Compare the bare wire method so both
+    // the framework-level and capability-qualified call forms work.
+    // Framework wire names contain a dot themselves. Only a leading
+    // capability prefix (`share.`) is stripped; `Share.invoke` is kept whole.
+    let call_method = match call.method.split_once('.') {
+        Some(("share" | "permissions" | "device_info" | "network", rest)) => rest,
+        _ => call.method.as_str(),
+    };
+    let reason = if call_method != method.name {
         "call method does not match the frozen method".to_owned()
     } else if let Err(reason) = validate_arguments(method, &call.arguments) {
         format!("{}: {reason}", method.name)
@@ -218,6 +227,30 @@ pub fn validate_call(method: &FrozenMethod, call: &MethodCall) -> Option<Reply> 
         message: Some(reason),
         details: Value::Null,
     })
+}
+
+/// Look up the frozen wire shape of one capability-qualified call, if any.
+///
+/// Frozen contracts use framework method names (`Share.invoke`,
+/// `System.exitApplication`); capability calls use qualified names
+/// (`share.*`, `permissions.*`). Only the frozen methods whose bare name
+/// matches the capability's wire method participate.
+pub fn method_for_call(call: &MethodCall) -> Option<&'static FrozenMethod> {
+    let capability = Capability::from_str(call.method.split('.').next().unwrap_or(""))?;
+    let frozen = contract(capability)?;
+    // Capability-qualified calls keep the full wire name after the first
+    // dot (`share.Share.invoke` -> `Share.invoke`), while a bare name may
+    // carry only the last segment. Match both shapes.
+    let rest = call
+        .method
+        .split_once('.')
+        .map(|(_, rest)| rest)
+        .unwrap_or("");
+    let bare = call.method.rsplit('.').next().unwrap_or(&call.method);
+    frozen
+        .methods
+        .iter()
+        .find(|method| method.name == rest || method.name == bare)
 }
 
 #[cfg(test)]
