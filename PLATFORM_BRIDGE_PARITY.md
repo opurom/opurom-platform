@@ -267,12 +267,33 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 | `flutter_tools/lib/src/flutter_plugins.dart:528-551` — 各端 registrant 按平台逐一注入 | `injection_slots()` 覆盖 14 类能力的全部方法，顺序确定 | slot 数 = Σ各能力方法数 |
 
 本轮修正 `haptic_method` 对完整 `HapticFeedbackType.vibrate` 类型串的接受（此前只接受八种 impact/notification 类型），未新增能力、未伪造实现。无渲染、IR、解释器改动，默认态零漂移。
+### 第二十五轮：深度轮次 — 跨模块事件码字典审计
+
+新增 `tests/event_code_dictionary_audit.rs`（8 项）：把散落在 `platform_channel` / `system_events` / `framework_channels` / `media_capabilities` 的桥接词表统一成五张可审计字典（平台事件、生命周期、通道错误码、通道命名空间、标准 codec 类型标签），逐项与 Flutter 3.50 官方常量比对，输出四类结论：`duplicate`（同一码跨命名空间或同表重复）、`gap`（审计范围内官方常量未被覆盖）、`illegal`（命名空间或形状违规）、`unused`（已声明但实现从未引用）。审计只读：解析编译期常量与 crate 源码文本，不新增运行时注册表。
+
+| Flutter 源码（3.50-candidate） | Opurom 审计项 | 验证 |
+| --- | --- | --- |
+| `services/message_codecs.dart:310-324` — 封闭的类型标签表 0..=14 | `codec_tag` 字典逐项比对 `Value::tag()` 与实际编码出的标签字节 | 14 个 `Value` 变体一一对应官方标签；写出的标签集合与官方可写集合完全相等 |
+| `services/message_codecs.dart:379-385` — 标签 5（larger integers）声明但 `writeValue` 从不写出 | `unused`：`5 largeInt` | Opurom 同样不写标签 5；解码标签 5 返回 `Unsupported("large integer")`，未知标签 15 返回 `Corrupt("unknown tag")` |
+| `services/binding.dart:174-182` — `flutter/system` 唯一框架事件 `memoryPressure` | `system_event` 字典：官方集合仅此一项 | 6 个事件码互不重复；`memoryPressure` 覆盖官方集合，其余 5 个带 `host.` 前缀且 `is_flutter_framework_event()` 为 false |
+| `services/binding.dart:448-457` — 五条 `AppLifecycleState.*` 生命周期消息 | `lifecycle` 字典 | 五态字符串与官方逐字相等，无缺口 |
+| `services/message_codec.dart:108-122,205-215`、`services/platform_channel.dart:359-364`、`engine/.../systemchannels/PlatformChannel.java:56,196` — Flutter 只用自由 `code` 字符串与异常类型表达失败 | `error_code` 字典 + Flutter 失败类型映射表 | 四个错误码互不重复、均为小写 snake_case；每个码都映射到一个官方失败类型；`error` 是唯一 Flutter 真实码串 |
+| `services/system_channels.dart:77,98,182,202,210,294,322,342,346,371,386,402,414,423,430,439,450,478,501,515,566,577,599,616` — 官方 `flutter/` 通道命名空间 | `channel_name` 字典 + 命名空间覆盖报告 | 桥接词表覆盖 `flutter/platform`、`flutter/lifecycle`、`flutter/system`、`flutter/platform_views`、`flutter/platform_views_2`；其余 19 条框架通道逐条列出 |
+| `flutter-plugins` 快照 `plugins.flutter.io/*` 命名空间 | 插件通道命名空间形状校验 | 全部以 `flutter/` 或 `plugins.flutter.io/` 开头，无越界命名 |
+
+审计结论（`namespace|kind|detail` 机器可读）：`duplicate` 0 项、`illegal` 0 项、审计范围内 `gap` 0 项；`unused` 7 项，逐条原因如下：
+
+- `error_code|unused|missing_plugin` — Flutter 把「无 handler」建模为 `MissingPluginException` 异常类型而非错误码串（`message_codec.dart:205-215`），因此该拼写只作类型级标签；缺 handler 场景由结构化的 `Reply::MissingPlugin` 承担，实现中不以错误信封发出。
+- `codec_tag|unused|5 largeInt` — Flutter 自身也从不写出标签 5。
+- `channel_name|unused|flutter/lifecycle`、`flutter/platform`、`flutter/platform_views`、`flutter/platform_views_2`、`plugins.flutter.io/camera` — 通道名常量已声明但尚未被生产通道表引用，属接线缺口而非死代码。
+
+审计器本身带自检：向字典注入重复值、非法值、缺失官方值与未被引用的码，四类结论都会被检出；跨命名空间重名单独归入 `cross` 命名空间。无渲染、IR、解释器改动，默认态零漂移。
 
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 十八轮本地全量通过；第十八轮新增双 codec 一致性 1 项，合计 123 个库单测 + 25 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
-- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）；新增模块内单测 10 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
+- 结果：2026-11-18 二十五轮本地全量通过；合计 133 个库单测 + 32 个集成测试组、共 371 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
+- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）；新增模块内单测 10 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）
 
@@ -281,3 +302,5 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 3. **系统事件生产者**：纯函数生产者已落地（`event_producers.rs`）；宿主侧 OS 信号采集点（Android/iOS 原生回调）尚未接入，需各宿主注入。
 4. **插件注册执行端**：`RegistrationPlan` 是冻结计划；`opurom-plugins` CLI 与 `opurom-cli` 各端工程生成尚未消费该计划。
 5. **跨仓库对齐**：`opurom-runtime-adapters` 的 9 类能力码与此处 12 类契约尚未统一命名，需 adapters 侧协同（本模块不修改他仓库代码）。
+6. **框架通道接线**（第二十五轮审计结论）：官方 24 条 `flutter/*` 框架通道中，桥接词表只覆盖 5 条；其余 19 条（`flutter/accessibility`、`flutter/backgesture`、`flutter/contextmenu`、`flutter/deferredcomponent`、`flutter/keyboard`、`flutter/keyevent`、`flutter/localization`、`flutter/menu`、`flutter/mousecursor`、`flutter/navigation`、`flutter/processtext`、`flutter/restoration`、`flutter/scribe`、`flutter/sensitivecontent`、`flutter/skia`、`flutter/spellcheck`、`flutter/status_bar`、`flutter/textinput`、`flutter/undomanager`）尚无 `flutter/` 同名通道。其中输入、IME、无障碍三类在本 crate 由 `input_bridge` / `ime` / `a11y` 自有 IR 路径承担，不走 Flutter 命名通道，其余需按宿主能力逐条评估后再决定是否建通道。
+7. **已声明未接线的通道名常量**：`system_channels::LIFECYCLE`、`PLATFORM`、`PLATFORM_VIEWS`、`PLATFORM_VIEWS_2` 与 `camera_methods::CHANNEL` 已冻结官方拼写，但生产通道表尚未引用；待宿主适配器建立 `ChannelTable` 时接入。
