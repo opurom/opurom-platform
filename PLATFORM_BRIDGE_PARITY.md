@@ -79,16 +79,33 @@ Flutter 版本：**3.50-candidate**，engine `371f77202a73e8dff57a8b3bff75bca55c
 | `image_picker_platform_interface/lib/src/method_channel/method_channel_image_picker.dart:12,75-152` — 五个通道方法与参数表 | `image_methods` 扩展：`RETRIEVE`、source/camera 索引、六个参数键、image/video 类型常量 | source 索引、imageQuality 0-100、RETRIEVE 免参数、CapabilityTable 接入 |
 | `image_picker_platform_interface/lib/src/types/types.dart:15-18` — `kTypeImage`/`kTypeVideo` | `TYPE_IMAGE`/`TYPE_VIDEO` | 字符串逐字断言 |
 
+### 第四轮：应用生命周期宿主观察者（P0 收尾）
+
+| Flutter 源码（3.50-candidate） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `services/binding.dart:448-457` 五态字符串 + `:313-381` 中间态合成 | `MacWindow::observe_lifecycle` 复用 `app_lifecycle::transitions` | 观察者直接产出生成态序列，与 wayland/win32/x11 宿主一致 |
+| `services/binding.dart:296-301` 初始状态读取 | `MacWindow` 构造即 `makeKeyAndOrderFront`，游标初始为 `Resumed` | 键窗口状态与初始 `resumed` 对齐 |
+| `scheduler/binding.dart:416-430` 帧门控 | 已有 `frames_enabled` 导出，观察者不改协议 | 门控回归测试保持通过 |
+
+macOS 通知映射（`objc2-app-kit` 0.3.2 静态通知名）：
+- `resumed` ← `NSApplicationDidBecomeActiveNotification` / `NSWindowDidBecomeKeyNotification`
+- `inactive` ← `NSApplicationDidResignActiveNotification` / `NSWindowDidResignKeyNotification`
+- `hidden` ← `NSApplicationDidHideNotification` / `NSWindowDidMiniaturizeNotification`
+- `resumed` ← `NSApplicationDidUnhideNotification` / `NSWindowDidDeminiaturizeNotification`
+- `detached` ← `NSWindowWillCloseNotification`
+
+实现要点：观察者经 `NSNotificationCenter.addObserverForName:object:queue:usingBlock:` 注册在主队列，与宿主事件循环同线程；令牌由 `LifecycleObserver` 持有，drop 即撤销注册；事件先入窗口自身 `VecDeque<Lifecycle>`，由 `drain_lifecycle()` FIFO 取出，宿主再送入统一输入流。架构红线不破：无运行时解释器、无对象树、IR 未触碰。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 三轮全量通过；第三轮新增 launcher/picker 后端 3 项与派生规则断言，合计 92 个库单测 + 23 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0）。
+- 结果：2026-11-18 四轮全量通过；第四轮新增 macOS 生命周期观察者（编译期验证，5 文件 +175 行），合计 92 个库单测 + 23 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0）。
 - 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）；新增模块内单测 10 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）
 
 1. **设备信息/网络/权限/分享**：本地 `flutter-plugins` 快照无官方插件源码，按硬约束不能自创 API；需先取到 pinned 官方源码再实现。已用 typed `unimplemented` 占位，不伪造成功。
-2. **真实宿主后端**：`PreferencesBackend`、`PathResolver`、`UrlLauncherBackend`、`ImagePickerBackend` 均已落地并接入 `CapabilityTable`；各端原生 opener/picker 表面仍需 mobile/web/desktop 宿主注入实现。
+2. **真实宿主后端**：`PreferencesBackend`、`PathResolver`、`UrlLauncherBackend`、`ImagePickerBackend` 均已落地并接入 `CapabilityTable`；macOS 生命周期观察者已接入；各端原生 opener/picker 表面仍需 mobile/web/desktop 宿主注入实现。
 3. **系统事件生产者**：`SystemEventDispatcher` 只做分发；宿主侧键盘/旋转/亮度/省电/刷新率的 OS 信号采集尚未接入。
 4. **插件注册执行端**：`RegistrationPlan` 是冻结计划；`opurom-plugins` CLI 与 `opurom-cli` 各端工程生成尚未消费该计划。
 5. **跨仓库对齐**：`opurom-runtime-adapters` 的 9 类能力码与此处 12 类契约尚未统一命名，需 adapters 侧协同（本模块不修改他仓库代码）。
