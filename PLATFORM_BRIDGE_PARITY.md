@@ -174,10 +174,14 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 新增 4 项模块单测；合计 116 库单测 + 24 个集成测试组全绿。无渲染、IR、解释器改动，默认态金标零漂移。
 
+### 第十三轮：深度轮次 — 框架通道到事件桥接
+
+新增 `src/channel_event_bridge.rs`（3 项单测）：`flutter/system` JSON payload 严格解码到 `SystemEvent::MemoryPressure`，未知 type 或非 map 载荷拒绝；`flutter/lifecycle` StringCodec 解码五态并复用 Flutter `binding.dart:313-381` 的中间态生成；解码后的系统消息接入 `SystemEventDispatcher`，重复事件按宿主信号去重。源码依据：message_codecs.dart:44-62,88-114；system_channels.dart:385-405；binding.dart:174-182,303-311,313-381,448-457。无渲染/IR/解释器改动，默认态零漂移。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 十一轮本地全量通过；第十一轮新增跨契约集成测试 5 项，合计 112 个库单测 + 24 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0；release build ok，rlib 3.2 MB）。
+- 结果：2026-11-18 十三轮本地全量通过；第十三轮新增框架通道事件桥接 3 项单测，合计 119 个库单测 + 24 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
 - 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）；新增模块内单测 10 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）

@@ -823,6 +823,8 @@ pub mod media_capabilities;
 pub mod system_events;
 // Pure host-signal to system-event producers.
 pub mod event_producers;
+// Framework channel payload to event bridge.
+pub mod channel_event_bridge;
 // Deterministic plugin registration contract.
 pub mod plugin_registry;
 // Frozen registration plan executor with isolated failures.
