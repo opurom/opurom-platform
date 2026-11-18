@@ -910,7 +910,7 @@ mod tests {
             }),
             invalid_argument("launch requires a url")
         );
-        let picker = ImagePickerBackend::new(|call| Reply::Success(Value::Null));
+        let picker = ImagePickerBackend::new(|_call| Reply::Success(Value::Null));
         assert_eq!(
             picker.call(&MethodCall {
                 method: image_methods::PICK_IMAGE.to_owned(),

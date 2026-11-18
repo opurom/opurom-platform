@@ -152,10 +152,16 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 - `native_backends`：新增 1 项畸形宿主参数测试，覆盖偏好设置缺 key、类型不匹配、launcher 非映射参数、picker source 索引类型错误。
 - 全部沿用 pinned 源码语义：`message_codecs.dart:88-200`（JSON 编解码）、`binding.dart:448-457`（生命周期）、`method_channel_url_launcher.dart:12-52`、`method_channel_image_picker.dart:75-152`。
 
+### 第十一轮：深度轮次 — 跨端契约审计
+
+新增 `tests/cross_contract.rs`（5 项测试）：统一错误码集合唯一且稳定；14 类能力名唯一且 `from_str` 可逆；camera/video 各通道方法表内部无冲突并保留 `create`/`dispose` 官方命名；系统事件 map payload 的 `type` 字段与 `code()` 严格一致，框架事件与 `host.*` 命名空间隔离；插件 manifest 能力声明唯一。
+
+审计结论：无硬编码错误码字面量（全部走 `error_codes` 常量）；无跨通道错误码漂移；纯契约层无跨端 API 分歧。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 十轮全量通过；第十轮新增边界测试 3 项，合计 112 个库单测 + 23 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0）。
+- 结果：2026-11-18 十一轮本地全量通过；第十一轮新增跨契约集成测试 5 项，合计 112 个库单测 + 24 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0；release build ok，rlib 3.2 MB）。
 - 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）；新增模块内单测 10 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）

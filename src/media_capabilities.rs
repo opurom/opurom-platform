@@ -23,8 +23,6 @@
 //! - `video_player/video_player_android/android/src/main/java/io/flutter/plugins/videoplayer/VideoPlayerPlugin.java:114-210`
 //!   — native method names (`position` is the native name of `getPosition`).
 
-use std::collections::BTreeMap;
-
 use crate::framework_channels::unimplemented;
 use crate::native_capabilities::Capability;
 use crate::platform_channel::{error_codes, MethodCall, Reply, Value};
@@ -236,6 +234,7 @@ pub unsafe fn video_handler(state: *mut u8, call: &MethodCall) -> Reply {
 mod tests {
     use super::*;
     use crate::native_capabilities::{qualified, CapabilityTable};
+    use std::collections::BTreeMap;
 
     fn args(entries: &[(&str, Value)]) -> Value {
         Value::Map(
