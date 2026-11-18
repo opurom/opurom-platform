@@ -277,6 +277,7 @@ const DESTROY_NOTIFY: c_int = 17;
 const CONFIGURE_NOTIFY: c_int = 22;
 const FOCUS_IN: c_int = 9;
 const FOCUS_OUT: c_int = 10;
+const UNMAP_NOTIFY: c_int = 18;
 const ENTER_NOTIFY: c_int = 7;
 const LEAVE_NOTIFY: c_int = 8;
 const KEY_PRESS_MASK: c_long = 1 << 0;
@@ -918,6 +919,11 @@ impl X11Host {
                     self.events.push_back(InputEvent::Lifecycle(state));
                 }
             }
+            UNMAP_NOTIFY => {
+                for state in self.lifecycle.report(Lifecycle::Inactive) {
+                    self.events.push_back(InputEvent::Lifecycle(state));
+                }
+            }
             EXPOSE => {
                 if !self.last_frame.is_empty() {
                     let frame = std::mem::take(&mut self.last_frame);
@@ -1472,6 +1478,11 @@ fn dispatch_window(
             }
         }
         FOCUS_OUT => {
+            for state in window.lifecycle.report(Lifecycle::Inactive) {
+                window.events.push_back(InputEvent::Lifecycle(state));
+            }
+        }
+        UNMAP_NOTIFY => {
             for state in window.lifecycle.report(Lifecycle::Inactive) {
                 window.events.push_back(InputEvent::Lifecycle(state));
             }

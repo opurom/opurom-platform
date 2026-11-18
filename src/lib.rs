@@ -31,6 +31,7 @@ pub mod gpu_presentation;
 pub mod graphics_backend;
 mod headless;
 pub mod ime;
+pub mod input_bridge;
 pub mod input_map;
 pub mod notification;
 mod pixel;
@@ -195,6 +196,13 @@ pub enum InputEvent {
         x: f32,
         y: f32,
         pointer: PointerState,
+    },
+    /// The host cancelled the active pointer (focus loss, minimize, system
+    /// gesture). Carries only the last portable coordinates, as the cross-end
+    /// contract does; the renderer matches the active pointer by id.
+    PointerCancel {
+        x: f32,
+        y: f32,
     },
     /// The pointer entered the window. A transition between windows is
     /// delivered as the old window's `PointerExit` before the new window's

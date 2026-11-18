@@ -30,10 +30,11 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW, LoadCursorW,
     PostQuitMessage, RegisterClassW, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
-    CW_USEDEFAULT, IDC_ARROW, MSG, SW_SHOW, WM_CHAR, WM_DESTROY, WM_DPICHANGED, WM_IME_COMPOSITION,
-    WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
-    WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-    WM_SETFOCUS, WM_SIZE, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    CW_USEDEFAULT, IDC_ARROW, MSG, SIZE_MINIMIZED, SW_SHOW, WM_CHAR, WM_DESTROY, WM_DPICHANGED,
+    WM_IME_COMPOSITION, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS, WM_SIZE, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW,
+    WS_OVERLAPPEDWINDOW,
 };
 
 use crate::app_lifecycle::LifecycleTracker;
@@ -368,6 +369,9 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_SIZE => {
+            if wparam as u32 == SIZE_MINIMIZED {
+                push_lifecycle(hwnd, Lifecycle::Inactive);
+            }
             let packed = lparam as u32;
             let client = Size {
                 width: (packed & 0xffff) as u32,
