@@ -202,13 +202,22 @@ pub fn validate_arguments(method: &FrozenMethod, arguments: &Value) -> Result<()
 /// a well-shaped call still answers `unimplemented`, so this function can
 /// never fabricate a success for a GAP capability.
 pub fn validate_call(method: &FrozenMethod, call: &MethodCall) -> Option<Reply> {
-    validate_arguments(method, &call.arguments)
-        .err()
-        .map(|reason| Reply::PlatformError {
-            code: error_codes::INVALID_ARGUMENT.to_owned(),
-            message: Some(format!("{}: {reason}", method.name)),
-            details: Value::Null,
-        })
+    // A `MethodCall` carries the method name and the arguments as two
+    // separate tagged values (`message_codecs.dart:600-617`); a host must
+    // validate both. A frozen method passed the wrong name is not the
+    // frozen call, even when its argument shape matches.
+    let reason = if call.method != method.name {
+        "call method does not match the frozen method".to_owned()
+    } else if let Err(reason) = validate_arguments(method, &call.arguments) {
+        format!("{}: {reason}", method.name)
+    } else {
+        return None;
+    };
+    Some(Reply::PlatformError {
+        code: error_codes::INVALID_ARGUMENT.to_owned(),
+        message: Some(reason),
+        details: Value::Null,
+    })
 }
 
 #[cfg(test)]
@@ -238,6 +247,28 @@ mod tests {
             );
             assert!(!entry.pin.is_empty());
         }
+    }
+
+    #[test]
+    fn validate_call_checks_method_name_and_arguments_together() {
+        let share = &contract(Capability::Share).unwrap().methods[0];
+        let wrong_name = MethodCall {
+            method: "Share.notInvoke".to_owned(),
+            arguments: Value::String("text".to_owned()),
+        };
+        assert_eq!(
+            validate_call(share, &wrong_name),
+            Some(Reply::PlatformError {
+                code: error_codes::INVALID_ARGUMENT.to_owned(),
+                message: Some("call method does not match the frozen method".to_owned()),
+                details: Value::Null,
+            })
+        );
+        let correct = MethodCall {
+            method: "Share.invoke".to_owned(),
+            arguments: Value::String("text".to_owned()),
+        };
+        assert_eq!(validate_call(share, &correct), None);
     }
 
     #[test]

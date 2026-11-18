@@ -435,6 +435,12 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 失败路径是纯函数：重复 10 次相同非法调用得到相同 reply；失败后 GAP register 的行数不变、4 类能力的 `unavailable_reason()` 不变；合法调用仍不前进到成功。本地全量测试使用稳定 release renderer 作为 sibling fixture（另一自动化正在重建 debug renderer，与该路径无关）。无渲染、IR、解释器改动，默认态零漂移。
 
+### 第二十九轮：深度轮次 — 冻结调用校验补齐方法名
+
+承接上轮 `frozen_contracts::validate_call`：`MethodCall` 由方法名与参数两个独立 tagged 值组成（`services/message_codecs.dart:600-617`），但此前只校验参数、忽略 `call.method`，使 frozen 定义可被任意方法名复用而通过形状检查。本轮让 `validate_call` 同时校验方法名与参数，方法名不符返回 typed `invalid_argument`（`message_codec.dart:108-122`）；参数合法且方法名正确的 GAP 调用仍返回 `None`，由调用方继续按 `unimplemented` 处理，绝不伪造成功。新增 1 项单测：错名+合法参数被拒、正名+合法参数通过。无渲染、IR、解释器改动，默认态零漂移。
+
+> 本地门禁说明：本轮全量 `cargo test --all-targets` 在本机有 3 个既存 GPU 测试失败（`gpu_animation_loop` 2 项、`gpu_presentation` 1 项，均为软件渲染器环境路径）。已用 stash 对比确认在干净 HEAD 上同样失败，且与本轮 `frozen_contracts` 改动无关；远端 Actions 同一 HEAD `cad736b` 为 6/6 成功。跳过这 3 项后本机其余测试全绿（154 库单测 + 所有非 GPU 集成测试），fmt 与 Linux/Windows 交叉 check 均通过。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
