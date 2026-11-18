@@ -1,0 +1,72 @@
+camera|camera.create|create|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+camera|camera.dispose|dispose|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+camera|camera.initialize|initialize|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+camera|camera.lockCaptureOrientation|lockCaptureOrientation|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+camera|camera.pauseVideoRecording|pauseVideoRecording|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+camera|camera.resumeVideoRecording|resumeVideoRecording|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+camera|camera.setFlashMode|setFlashMode|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+camera|camera.startVideoRecording|startVideoRecording|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+camera|camera.stopVideoRecording|stopVideoRecording|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+camera|camera.takePicture|takePicture|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+camera|camera.unlockCaptureOrientation|unlockCaptureOrientation|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+clipboard|clipboard.getData|getData|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+clipboard|clipboard.hasStrings|hasStrings|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+clipboard|clipboard.setData|setData|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+device_info|device_info.displayGeometry|displayGeometry|value||value|unimplemented|no device_info plugin source in the local snapshot; local projections are not parity|services/message_codecs.dart:467,600-617,628-663
+device_info|device_info.dpiScale|dpiScale|value||value|unimplemented|no device_info plugin source in the local snapshot; local projections are not parity|services/message_codecs.dart:467,600-617,628-663
+device_info|device_info.graphicsBackend|graphicsBackend|value||value|unimplemented|no device_info plugin source in the local snapshot; local projections are not parity|services/message_codecs.dart:467,600-617,628-663
+device_info|device_info.viewport|viewport|value||value|unimplemented|no device_info plugin source in the local snapshot; local projections are not parity|services/message_codecs.dart:467,600-617,628-663
+file_storage|file_storage.keys|keys|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+file_storage|file_storage.read|read|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+file_storage|file_storage.remove|remove|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+file_storage|file_storage.write|write|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+haptics|haptics.heavyImpact|heavyImpact|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+haptics|haptics.lightImpact|lightImpact|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+haptics|haptics.mediumImpact|mediumImpact|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+haptics|haptics.selectionClick|selectionClick|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+haptics|haptics.vibrate|vibrate|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+image_picker|image_picker.pickImage|pickImage|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+image_picker|image_picker.pickMultiImage|pickMultiImage|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+image_picker|image_picker.pickVideo|pickVideo|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+image_picker|image_picker.retrieve|retrieve|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+notifications|notifications.cancel|cancel|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+notifications|notifications.post|post|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+path_provider|path_provider.getApplicationDocumentsDirectory|getApplicationDocumentsDirectory|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+path_provider|path_provider.getApplicationSupportDirectory|getApplicationSupportDirectory|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+path_provider|path_provider.getDownloadsDirectory|getDownloadsDirectory|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+path_provider|path_provider.getExternalStorageDirectories|getExternalStorageDirectories|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+path_provider|path_provider.getExternalStorageDirectory|getExternalStorageDirectory|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+path_provider|path_provider.getLibraryDirectory|getLibraryDirectory|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+path_provider|path_provider.getTemporaryDirectory|getTemporaryDirectory|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+permissions|permissions.System.exitApplication|System.exitApplication|map|type,exitCode|map|invalid_argument|no permission plugin source in the local snapshot|services/binding.dart:523-528; engine/src/flutter/lib/ui/platform_dispatcher.dart:2481-2498
+preferences|preferences.clear|clear|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+preferences|preferences.commit|commit|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+preferences|preferences.getBool|getBool|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+preferences|preferences.getDouble|getDouble|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+preferences|preferences.getInt|getInt|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+preferences|preferences.getKeys|getKeys|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+preferences|preferences.getStringList|getStringList|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+preferences|preferences.getString|getString|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+preferences|preferences.get|get|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+preferences|preferences.reload|reload|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+preferences|preferences.remove|remove|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+preferences|preferences.setBool|setBool|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+preferences|preferences.setDouble|setDouble|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+preferences|preferences.setInt|setInt|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+preferences|preferences.setStringList|setStringList|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+preferences|preferences.setString|setString|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+share|share.Share.invoke|Share.invoke|string||null|invalid_argument|no share plugin source in the local snapshot; Share.invoke is frozen on flutter/platform|widgets/editable_text.dart:3025-3037; widgets/selectable_region.dart:1595-1600
+url_launcher|url_launcher.canLaunch|canLaunch|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+url_launcher|url_launcher.closeWebView|closeWebView|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+url_launcher|url_launcher.launch|launch|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+video_player|video_player.create|create|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+video_player|video_player.dispose|dispose|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+video_player|video_player.init|init|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+video_player|video_player.pause|pause|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+video_player|video_player.play|play|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+video_player|video_player.position|position|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+video_player|video_player.seekTo|seekTo|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+video_player|video_player.setLooping|setLooping|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+video_player|video_player.setMixWithOthers|setMixWithOthers|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+video_player|video_player.setPlaybackSpeed|setPlaybackSpeed|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+video_player|video_player.setVolume|setVolume|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663

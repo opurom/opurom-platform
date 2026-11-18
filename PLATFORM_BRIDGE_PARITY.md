@@ -459,17 +459,31 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 新增 `tests/capability_dispatch_failure_contract.rs`（6 项）：malformed 调用不进 handler、缺键/错类型统一错误模板、合法 GAP 调用恒 unimplemented、非 GAP 正常派发、错误信封字节往返、形状闸门纯函数可重放且不改表。无渲染、IR、解释器改动，默认态零漂移。
 
-### 第三十一轮：深度轮次 — frozen 方法匹配的形状收口
+### 第四十二轮：深度轮次 — frozen 方法匹配的形状收口
 
 `frozen_contracts::method_for_call` 此前用 `rsplit('.')` 取最后一段匹配 frozen 名，使 `share.anything.Share.invoke` 这类任意限定链都能通过 frozen gate（`MethodCall` 的 wire 名是单个字符串，`services/message_codecs.dart:600-617`）。本轮只接受两种声明形状：精确 frozen 名（能力由 frozen 契约自推），或恰好一个能力前缀（`share.Share.invoke`）；其余一律不参与 frozen 校验。新增 1 项单测覆盖五类错误形状。无渲染、IR、解释器改动，默认态零漂移。
 
 > 本地 GPU 环境基线同前两轮：3 个既存 GPU 测试在本机因软件渲染器环境失败，干净 HEAD 复现，与本轮无关；远端 CI 全绿。
+### 第四十一轮：深度轮次 — 能力派发契约机器可读报告
+
+新增 `src/bin/generate-capability-contract.rs`（生成脚本）、`tests/fixtures/capability-contract.psv`（72 行 artifact）与 `tests/capability_contract_report.rs`（5 项）：把 14 类能力、全部可派发方法、冻结 GAP wire 方法、形状规则、错误码与源码 pin 合并成单一 PSV 报告，供宿主注入生成器与审计脚本直接消费。
+
+报告字段：`capability|qualified_method|wire_method|argument|argument_keys|returns|error_code|gap|source_pin`。
+
+| Flutter 源码（3.50-candidate） | Opurom 报告字段 | 验证 |
+| --- | --- | --- |
+| `services/message_codecs.dart:467,600-617,628-663` — ArgumentError、MethodCall 两段值、错误信封 `(code,message,details[,stacktrace])` | `argument` / `argument_keys` / `returns` / `error_code` | 全部方法的形状字段落在封闭集合；错误码只出现 `invalid_argument` 或 `unimplemented` |
+| `services/platform_channel.dart:359-364,600-613` — null reply 与 handler 错误映射 | `error_code` / `gap` | 非 GAP 能力形状错误记 `invalid_argument`；GAP 能力保持 `unimplemented` 并带 GAP 原因 |
+| `services/binding.dart:448-457,523-528` — 框架方法载荷实例 | `permissions.System.exitApplication` 的 `type,exitCode` 键与 pin | 冻结 GAP 方法与本地 dispatch 方法表同源，不伪造实现 |
+| `widgets/editable_text.dart:3025-3037`、`selectable_region.dart:1595-1600` — Share.invoke 裸字符串载荷 | `share.Share.invoke` 的 `string` / 空键 / `null` 返回 | 冻结形状与 `CapabilityTable::call` 的派发闸门一致 |
+
+测试会从编译期表重新运行生成器到临时文件，并与 checked-in artifact 做字节级比对；任何能力、方法、形状、错误码或 pin 漂移都会让报告测试红灯。报告共 72 行：70 行来自 14 类能力的可派发方法，2 行是两条有官方 pin 的冻结 GAP wire 方法。无渲染、IR、解释器改动，默认态零漂移。
 
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 四十轮本地全量通过；合计 155 个库单测 + 42 个集成测试组、共 448 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
-- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）、`tests/channel_codec_contract.rs`（10）、`tests/capability_channel_alignment.rs`（5）、`tests/declared_channel_disposition.rs`（7）、`tests/gap_register_contract.rs`（8）、`tests/frozen_contract_crosscheck.rs`（8）、`tests/frozen_contract_failure_paths.rs`（7）、`tests/capability_dispatch_failure_contract.rs`（6）；新增模块内单测 29 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
+- 结果：2026-11-18 四十二轮本地全量通过；合计 156 个库单测 + 43 个集成测试组、共 454 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
+- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）、`tests/channel_codec_contract.rs`（10）、`tests/capability_channel_alignment.rs`（5）、`tests/declared_channel_disposition.rs`（7）、`tests/gap_register_contract.rs`（8）、`tests/frozen_contract_crosscheck.rs`（8）、`tests/frozen_contract_failure_paths.rs`（7）、`tests/capability_dispatch_failure_contract.rs`（6）、`tests/capability_contract_report.rs`（5）；新增模块内单测 29 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）
 
