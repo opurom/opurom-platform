@@ -44,9 +44,22 @@
 //!   success lists or three/four-element error lists.
 //! - `packages/flutter/lib/src/services/message_codecs.dart:263-324,580-596`
 //!   — the standard message and method codecs.
+//! - `flutter-plugins` at `557d3284ac9dda32a1106bb75be8a23bdccd2f96`:
+//!   `packages/camera/camera_platform_interface/lib/src/method_channel/
+//!   method_channel_camera.dart:17,323-324` (`plugins.flutter.io/camera`
+//!   and its `EventChannel` image stream),
+//!   `packages/path_provider/path_provider_platform_interface/lib/src/
+//!   method_channel_path_provider.dart:16`,
+//!   `packages/url_launcher/url_launcher_platform_interface/lib/
+//!   method_channel_url_launcher.dart:12`,
+//!   `packages/image_picker/image_picker_platform_interface/lib/src/
+//!   method_channel/method_channel_image_picker.dart:12` and
+//!   `packages/shared_preferences/shared_preferences_platform_interface/lib/
+//!   method_channel_shared_preferences.dart:12`.
 //!
 //! The table also carries the complete official framework channel
-//! inventory, so a channel the bridge does not serve yet is declared with
+//! inventory and the plugin channel inventory of the pinned plugin
+//! snapshot, so a channel the bridge does not serve yet is declared with
 //! its official kind and codec instead of being silently absent. Only the
 //! channels marked [`Coverage::Bridged`] are routed; the rest are
 //! [`Coverage::Declared`] and are rejected by the encoders with a typed
@@ -323,10 +336,69 @@ pub fn bridged_channels() -> impl Iterator<Item = &'static ChannelContract> {
         .iter()
         .filter(|entry| entry.coverage == Coverage::Bridged)
 }
+/// The official plugin channel inventory of the pinned plugin snapshot.
+///
+/// Every plugin channel here is a `MethodChannel` or an `EventChannel`
+/// without an explicit codec, so it carries the default
+/// `StandardMethodCodec`.
+pub const PLUGIN_CHANNELS: &[ChannelContract] = &[
+    ChannelContract {
+        name: crate::media_capabilities::camera_methods::CHANNEL,
+        kind: ChannelKind::Method { optional: false },
+        optional: false,
+        codec: ChannelCodec::Standard,
+        coverage: Coverage::Declared,
+        pin: "camera_platform_interface/lib/src/method_channel/method_channel_camera.dart:17",
+    },
+    ChannelContract {
+        name: "plugins.flutter.io/camera/imageStream",
+        kind: ChannelKind::Event,
+        optional: false,
+        codec: ChannelCodec::Standard,
+        coverage: Coverage::Declared,
+        pin: "camera_platform_interface/lib/src/method_channel/method_channel_camera.dart:323-324",
+    },
+    ChannelContract {
+        name: "plugins.flutter.io/path_provider",
+        kind: ChannelKind::Method { optional: false },
+        optional: false,
+        codec: ChannelCodec::Standard,
+        coverage: Coverage::Declared,
+        pin: "path_provider_platform_interface/lib/src/method_channel_path_provider.dart:16",
+    },
+    ChannelContract {
+        name: "plugins.flutter.io/url_launcher",
+        kind: ChannelKind::Method { optional: false },
+        optional: false,
+        codec: ChannelCodec::Standard,
+        coverage: Coverage::Declared,
+        pin: "url_launcher_platform_interface/lib/method_channel_url_launcher.dart:12",
+    },
+    ChannelContract {
+        name: "plugins.flutter.io/image_picker",
+        kind: ChannelKind::Method { optional: false },
+        optional: false,
+        codec: ChannelCodec::Standard,
+        coverage: Coverage::Declared,
+        pin: "image_picker_platform_interface/lib/src/method_channel/method_channel_image_picker.dart:12",
+    },
+    ChannelContract {
+        name: "plugins.flutter.io/shared_preferences",
+        kind: ChannelKind::Method { optional: false },
+        optional: false,
+        codec: ChannelCodec::Standard,
+        coverage: Coverage::Declared,
+        pin: "shared_preferences_platform_interface/lib/method_channel_shared_preferences.dart:12",
+    },
+];
+
 /// Look up the official declaration of one framework channel, whether or not
 /// the bridge routes it.
 pub fn contract(name: &str) -> Option<&'static ChannelContract> {
-    FRAMEWORK_CHANNELS.iter().find(|entry| entry.name == name)
+    FRAMEWORK_CHANNELS
+        .iter()
+        .chain(PLUGIN_CHANNELS.iter())
+        .find(|entry| entry.name == name)
 }
 
 /// The declaration of a channel the bridge routes.

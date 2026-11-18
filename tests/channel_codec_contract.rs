@@ -39,10 +39,11 @@ use std::collections::BTreeSet;
 use opurom_platform::channel_contract::{
     bridged_channels, contract, decode_channel_envelope, decode_channel_message,
     decode_channel_method_call, encode_channel_envelope, encode_channel_message,
-    encode_channel_method_call, ChannelCodec, Coverage, FRAMEWORK_CHANNELS,
+    encode_channel_method_call, ChannelCodec, Coverage, FRAMEWORK_CHANNELS, PLUGIN_CHANNELS,
 };
 use opurom_platform::channel_event_bridge::{decode_lifecycle_message, decode_system_message};
 use opurom_platform::framework_channels::parse_lifecycle_message;
+use opurom_platform::media_capabilities::camera_methods;
 use opurom_platform::platform_channel::{
     decode_message, encode_message, error_codes, system_channels, CodecError, MethodCall, Reply,
     Value,
@@ -286,6 +287,59 @@ const INVENTORY: &[(&str, &str, bool, ChannelCodec, bool)] = &[
         false,
     ),
 ];
+
+/// The plugin channel inventory of the pinned plugin snapshot
+/// (`flutter-plugins` at `557d3284ac9dda32a1106bb75be8a23bdccd2f96`).
+const PLUGIN_INVENTORY: &[(&str, &str)] = &[
+    ("plugins.flutter.io/camera", "method"),
+    ("plugins.flutter.io/camera/imageStream", "event"),
+    ("plugins.flutter.io/path_provider", "method"),
+    ("plugins.flutter.io/url_launcher", "method"),
+    ("plugins.flutter.io/image_picker", "method"),
+    ("plugins.flutter.io/shared_preferences", "method"),
+];
+
+#[test]
+fn the_plugin_inventory_matches_the_pinned_plugin_snapshot() {
+    assert_eq!(PLUGIN_CHANNELS.len(), PLUGIN_INVENTORY.len());
+    for (name, kind) in PLUGIN_INVENTORY {
+        let entry = contract(name)
+            .unwrap_or_else(|| panic!("{name} is missing from the channel inventory"));
+        assert!(
+            entry.name.starts_with("plugins.flutter.io/"),
+            "{name} is outside the plugin namespace"
+        );
+        // Every plugin channel in the snapshot is declared without an
+        // explicit codec, so it carries the default standard codec.
+        assert_eq!(entry.codec, ChannelCodec::Standard, "{name} codec drifted");
+        assert_eq!(
+            entry.coverage,
+            Coverage::Declared,
+            "{name} coverage drifted"
+        );
+        assert!(!entry.pin.is_empty(), "{name} has no source pin");
+        match *kind {
+            "method" => assert!(
+                matches!(
+                    entry.kind,
+                    opurom_platform::platform_channel::ChannelKind::Method { .. }
+                ),
+                "{name} kind drifted"
+            ),
+            "event" => assert_eq!(
+                entry.kind,
+                opurom_platform::platform_channel::ChannelKind::Event,
+                "{name} kind drifted"
+            ),
+            other => panic!("unknown kind {other}"),
+        }
+    }
+    // The camera channel name the crate publishes is the official one.
+    assert_eq!(
+        contract(camera_methods::CHANNEL).map(|entry| entry.name),
+        Some(camera_methods::CHANNEL)
+    );
+}
 
 #[test]
 fn the_inventory_covers_every_official_framework_channel() {

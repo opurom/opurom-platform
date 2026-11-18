@@ -321,10 +321,22 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 清单与第二十五轮的审计表互为独立来源：`tests/event_code_dictionary_audit.rs` 用自己固定的官方表逐名比对实现的 24 条清单，任何一条名称漂移都会让两边对不上。已桥接 5 条、未桥接 19 条，未桥接条目在编解码入口被 typed 拒绝，不会被误当成可用通道。无渲染、IR、解释器改动，默认态零漂移。
 
+### 第二十八轮：深度轮次 — 插件通道清单与通道契约对齐
+
+把插件生态规范的通道侧补齐：新增 `channel_contract::PLUGIN_CHANNELS`（6 条），逐条取自本地 `flutter-plugins` 快照（`557d3284ac9dda32a1106bb75be8a23bdccd2f96`），并让 `contract()` 同时检索框架清单与插件清单。插件通道在快照里都没有显式 codec，因此一律记为默认 `StandardMethodCodec`；相机图像流是唯一一条 `EventChannel`，`ChannelKind::Event` 由此有了真实来源。
+
+| Flutter/插件源码（3.50-candidate） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `flutter-plugins/packages/camera/camera_platform_interface/lib/src/method_channel/method_channel_camera.dart:17` — `plugins.flutter.io/camera` 是 `MethodChannel` | 插件清单条目，引用 crate 已发布的 `camera_methods::CHANNEL` | 常量与清单互为引用，`camera_methods::CHANNEL` 不再是「已声明未接线」 |
+| 同文件 `:323-324` — `plugins.flutter.io/camera/imageStream` 是 `EventChannel` | `ChannelKind::Event` 条目 | 通道类型逐条比对独立固定的插件表 |
+| `flutter-plugins/packages/path_provider/path_provider_platform_interface/lib/src/method_channel_path_provider.dart:16`、`url_launcher/url_launcher_platform_interface/lib/method_channel_url_launcher.dart:12`、`image_picker/image_picker_platform_interface/lib/src/method_channel/method_channel_image_picker.dart:12`、`shared_preferences/shared_preferences_platform_interface/lib/method_channel_shared_preferences.dart:12` | 其余 4 条插件通道条目 | 名称、类型、codec 与快照逐条一致 |
+
+审计基线随之再收敛：`plugins.flutter.io/camera` 被插件清单引用后不再是「已声明未接线」，`unused` 由 3 项降为 2 项（只剩 Flutter 自身也从不写出的标签 5，以及只作类型级标签的 `missing_plugin`）。审计测试同时新增「实现插件清单 vs 审计固定插件表」逐名交叉核对 1 项。无渲染、IR、解释器改动，默认态零漂移。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 二十七轮本地全量通过；合计 140 个库单测 + 33 个集成测试组、共 390 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
+- 结果：2026-11-18 二十八轮本地全量通过；合计 140 个库单测 + 33 个集成测试组、共 391 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
 - 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）、`tests/channel_codec_contract.rs`（10）；新增模块内单测 17 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）
@@ -335,4 +347,4 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 4. **插件注册执行端**：`RegistrationPlan` 是冻结计划；`opurom-plugins` CLI 与 `opurom-cli` 各端工程生成尚未消费该计划。
 5. **跨仓库对齐**：`opurom-runtime-adapters` 的 9 类能力码与此处 12 类契约尚未统一命名，需 adapters 侧协同（本模块不修改他仓库代码）。
 6. **框架通道接线**（第二十五轮审计结论）：官方 24 条 `flutter/*` 框架通道中，桥接词表只覆盖 5 条；其余 19 条（`flutter/accessibility`、`flutter/backgesture`、`flutter/contextmenu`、`flutter/deferredcomponent`、`flutter/keyboard`、`flutter/keyevent`、`flutter/localization`、`flutter/menu`、`flutter/mousecursor`、`flutter/navigation`、`flutter/processtext`、`flutter/restoration`、`flutter/scribe`、`flutter/sensitivecontent`、`flutter/skia`、`flutter/spellcheck`、`flutter/status_bar`、`flutter/textinput`、`flutter/undomanager`）尚无 `flutter/` 同名通道。其中输入、IME、无障碍三类在本 crate 由 `input_bridge` / `ime` / `a11y` 自有 IR 路径承担，不走 Flutter 命名通道，其余需按宿主能力逐条评估后再决定是否建通道。
-7. **已声明未接线的通道名常量**：第二十六轮把 `system_channels::LIFECYCLE`、`PLATFORM`、`PLATFORM_VIEWS`、`PLATFORM_VIEWS_2` 接入 `channel_contract` 的编译期通道契约表，这四条已不再是未引用项；`camera_methods::CHANNEL` 仍只有声明、没有生产引用，待宿主适配器建立 `ChannelTable` 时接入。
+7. **已声明未接线的通道名常量**：第二十六轮把 `system_channels::LIFECYCLE`、`PLATFORM`、`PLATFORM_VIEWS`、`PLATFORM_VIEWS_2` 接入 `channel_contract` 的编译期通道契约表，第二十八轮把 `camera_methods::CHANNEL` 接入插件通道清单，通道名常量已全部有引用；剩下的缺口是这些通道尚未被任何生产 `ChannelTable` 路由，待宿主适配器建立通道表时接入。

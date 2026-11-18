@@ -190,6 +190,10 @@ const OFFICIAL_PLUGIN_CHANNELS: &[(&str, &str)] = &[
         "flutter-plugins/packages/camera/camera_platform_interface/lib/src/method_channel/method_channel_camera.dart:17",
     ),
     (
+        "plugins.flutter.io/camera/imageStream",
+        "flutter-plugins/packages/camera/camera_platform_interface/lib/src/method_channel/method_channel_camera.dart:323-324",
+    ),
+    (
         "plugins.flutter.io/path_provider",
         "flutter-plugins/packages/path_provider/path_provider_platform_interface/lib/src/method_channel_path_provider.dart:16",
     ),
@@ -870,9 +874,6 @@ fn unused_codes_match_the_documented_baseline() {
     unused.sort();
 
     let expected = vec![
-        // The plugin channel name is declared but no production channel table
-        // references it yet.
-        "channel_name|unused|plugins.flutter.io/camera".to_owned(),
         // Flutter declares tag 5 but never writes it.
         "codec_tag|unused|5 largeInt".to_owned(),
         // Flutter models a missing handler as an exception kind, never as an
@@ -1072,6 +1073,19 @@ fn channel_namespace_coverage_is_explicit() {
         sorted_inventory,
         official.iter().copied().collect::<Vec<&str>>()
     );
+
+    // The same holds for the plugin channel inventory.
+    let mut sorted_plugins: Vec<&str> = channel_contract::PLUGIN_CHANNELS
+        .iter()
+        .map(|entry| entry.name)
+        .collect();
+    sorted_plugins.sort();
+    let mut pinned_plugins: Vec<&str> = OFFICIAL_PLUGIN_CHANNELS
+        .iter()
+        .map(|entry| entry.0)
+        .collect();
+    pinned_plugins.sort();
+    assert_eq!(sorted_plugins, pinned_plugins);
 
     let uncovered: Vec<&str> = official
         .iter()
