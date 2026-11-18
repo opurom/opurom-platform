@@ -242,6 +242,19 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 本轮只补确定性、可重放的畸形输入测试，不改实现；默认态零漂移，不触碰 IR/渲染/解释器。
 
+### 第二十三轮：深度轮次 — 多平台宿主注入点审计
+
+`src/host_injection_audit.rs` 新增 `framework_channel_method`、`InjectionSlot` 与 `injection_slots()`，把「宿主注入点」从纯 capability 行细化为逐方法槽位；并新增 2 项单测：
+
+| Flutter 源码（3.50-candidate） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `services/clipboard.dart:36,49-51,65-67` — `Clipboard.setData/getData/hasStrings` 是 `flutter/platform` 框架方法 | `Capability::Clipboard` 三方法逐一映射到 `platform_methods::CLIPBOARD_*` | 三方法名逐字断言 |
+| `services/haptic_feedback.dart:24-147` — 八种 `HapticFeedbackType.*` 全部经 `HapticFeedback.vibrate` 单方法发送 | `haptic_type_name` 把裸方法名映射到类型常量；`haptic_method` 接受完整类型串（含 `HapticFeedbackType.vibrate`）；`InjectionSlot.framework_method` 统一折叠 | 五种裸方法全部折叠到 `HapticFeedback.vibrate` |
+| `services/platform_channel.dart:350-366` — 无 handler 通道返回 null reply | 每个 slot 的 `missing_reply` 必为 typed `unimplemented`，GAP 类（network/permissions/share/device_info）message 含 `snapshot` | 逐 slot 断言 code/details/message |
+| `flutter_tools/lib/src/flutter_plugins.dart:528-551` — 各端 registrant 按平台逐一注入 | `injection_slots()` 覆盖 14 类能力的全部方法，顺序确定 | slot 数 = Σ各能力方法数 |
+
+本轮修正 `haptic_method` 对完整 `HapticFeedbackType.vibrate` 类型串的接受（此前只接受八种 impact/notification 类型），未新增能力、未伪造实现。无渲染、IR、解释器改动，默认态零漂移。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。

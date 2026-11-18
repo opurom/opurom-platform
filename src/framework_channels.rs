@@ -361,13 +361,32 @@ pub mod platform_methods {
 /// The sole type on `flutter/system` (`binding.dart:178`).
 pub const SYSTEM_EVENT_MEMORY_PRESSURE: &str = "memoryPressure";
 
+/// Map a bare haptic method name from the capability table to the
+/// `HapticFeedbackType.*` type constant string that `HapticFeedback.vibrate`
+/// carries (`haptic_feedback.dart:24-147`). `None` means the name is not one
+/// of the options the capability table declares.
+pub fn haptic_type_name(method: &str) -> Option<&'static str> {
+    match method {
+        "vibrate" => Some(platform_methods::HAPTIC_VIBRATE),
+        "lightImpact" => Some(platform_methods::HAPTIC_LIGHT_IMPACT),
+        "mediumImpact" => Some(platform_methods::HAPTIC_MEDIUM_IMPACT),
+        "heavyImpact" => Some(platform_methods::HAPTIC_HEAVY_IMPACT),
+        "selectionClick" => Some(platform_methods::HAPTIC_SELECTION_CLICK),
+        "successNotification" => Some(platform_methods::HAPTIC_SUCCESS_NOTIFICATION),
+        "warningNotification" => Some(platform_methods::HAPTIC_WARNING_NOTIFICATION),
+        "errorNotification" => Some(platform_methods::HAPTIC_ERROR_NOTIFICATION),
+        _ => None,
+    }
+}
+
 /// Map a haptic type string from `HapticFeedback.vibrate` arguments back to
 /// its method name. `None` means the type is not one of Flutter's eight
 /// (including the bare `vibrate()` call with no argument).
 pub fn haptic_method(type_name: Option<&str>) -> Option<&'static str> {
     match type_name {
         None => Some(platform_methods::HAPTIC_VIBRATE),
-        Some(platform_methods::HAPTIC_LIGHT_IMPACT)
+        Some(platform_methods::HAPTIC_VIBRATE)
+        | Some(platform_methods::HAPTIC_LIGHT_IMPACT)
         | Some(platform_methods::HAPTIC_MEDIUM_IMPACT)
         | Some(platform_methods::HAPTIC_HEAVY_IMPACT)
         | Some(platform_methods::HAPTIC_SELECTION_CLICK)
