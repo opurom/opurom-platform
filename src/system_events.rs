@@ -260,11 +260,75 @@ impl SystemEventDispatcher {
     pub fn reset(&mut self, code: &str) {
         self.last.remove(code);
     }
+
+    /// Feed one already-decoded host signal through this dispatcher. The
+    /// producers in `event_producers` are pure; this is a deterministic
+    /// composition of production and dispatch.
+    ///
+    /// # Safety
+    /// Every subscriber state pointer in `self` must remain valid for this call.
+    pub unsafe fn emit_host_event(&mut self, event: SystemEvent) -> bool {
+        // SAFETY: documented by the caller.
+        unsafe { self.emit(event) }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_producers_feed_the_dispatcher_with_dedupe() {
+        use crate::event_producers::{
+            brightness, keyboard_visibility, memory_pressure, orientation_from_index, power_mode,
+            refresh_rate,
+        };
+
+        unsafe fn collect(state: *mut u8, event: &SystemEvent) {
+            // SAFETY: state points to a live Vec<SystemEvent> owned by the test.
+            unsafe { &mut *(state as *mut Vec<SystemEvent>) }.push(event.clone());
+        }
+
+        let mut delivered = Vec::new();
+        let state = &mut delivered as *mut Vec<SystemEvent> as *mut u8;
+        let mut dispatcher = SystemEventDispatcher::new();
+        for event in [
+            memory_pressure(),
+            keyboard_visibility(true, Some(300)),
+            orientation_from_index(1).unwrap(),
+            brightness(true),
+            power_mode(true),
+            refresh_rate(120),
+        ] {
+            dispatcher = dispatcher.on(
+                event.clone(),
+                Subscriber {
+                    function: collect,
+                    state,
+                },
+            );
+        }
+        let produced = [
+            memory_pressure(),
+            keyboard_visibility(true, Some(300)),
+            orientation_from_index(1).unwrap(),
+            brightness(true),
+            power_mode(true),
+            refresh_rate(120),
+        ];
+        for event in produced.iter().cloned() {
+            // SAFETY: `delivered` outlives every call and owns the state.
+            assert!(unsafe { dispatcher.emit_host_event(event) });
+        }
+        assert_eq!(delivered, produced);
+        // Repeating an identical host signal is deduped by kind and value.
+        assert!(!unsafe { dispatcher.emit_host_event(refresh_rate(120)) });
+        assert_eq!(delivered.len(), 6);
+        // A changed value of the same kind is delivered to the same slot.
+        assert!(unsafe { dispatcher.emit_host_event(refresh_rate(144)) });
+        assert_eq!(delivered.len(), 7);
+        assert_eq!(dispatcher.subscriber_count(), 6);
+    }
 
     #[test]
     fn memory_pressure_payload_matches_flutter() {

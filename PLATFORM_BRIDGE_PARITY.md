@@ -182,10 +182,14 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 新增 `src/host_injection_audit.rs`（3 项单测）：为 14 类能力生成稳定审计行（方法数、是否要求宿主 handler、GAP 原因）；空 `CapabilityTable` 对所有有方法的 capability 返回 typed `unimplemented`，绝不伪造 `Success(Null)`；qualifed method 形状保持 codec-neutral。源码依据：flutter_tools/lib/src/flutter_plugins.dart:528-551（宿主注册）、services/platform_channel.dart:350-366（MissingPluginException 语义）。GAP 类（network/permissions/share）方法表为空，按构造保持不可调用而非伪装成功。
 
+### 第十五轮：深度轮次 — 宿主信号到分发器端到端链
+
+`SystemEventDispatcher` 增加 `emit_host_event` 便捷入口；新增 1 项端到端测试，把 `event_producers` 的六类宿主信号（memoryPressure/keyboard/orientation/brightness/power/refreshRate）生成后逐项接入分发器，验证订阅 slot 稳定、同值同 kind 去重、同 kind 新值仍送达。源码依据：services/binding.dart:174-182（唯一框架事件）、system_channels.dart:599（键盘）、system_chrome.dart:43-70（朝向索引）、binary_messenger.dart:66-80（单 handler 语义）。不触碰渲染/IR/解释器，默认态零漂移。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 十四轮本地全量通过；第十四轮新增宿主注入审计 3 项单测，合计 122 个库单测 + 24 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
+- 结果：2026-11-18 十五轮本地全量通过；第十五轮新增端到端事件链 1 项单测，合计 123 个库单测 + 24 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
 - 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）；新增模块内单测 10 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）
