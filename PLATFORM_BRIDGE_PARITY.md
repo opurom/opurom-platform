@@ -158,6 +158,22 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 审计结论：无硬编码错误码字面量（全部走 `error_codes` 常量）；无跨通道错误码漂移；纯契约层无跨端 API 分歧。
 
+### 第十二轮：深度轮次 — 多平台原生视图适配补全
+
+`src/platform_view_bridge.rs` 从 Android 最小形状扩展到 Darwin / Android / HCPP 三端共用一套冻结 wire 契约，所有键和值均来自 pinned `flutter-golden@ab2912035e`：
+
+| Flutter 源码（3.50-candidate） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `services/platform_views.dart:268-280,1672-1705` — `gestureBlockingPolicy` 四值字符串 | `view_methods::gesture_blocking_policy::{EAGER,WAIT_UNTIL_TOUCHES_ENDED,FALLBACK_TO_PLUGIN_DEFAULT,DO_NOT_BLOCK_GESTURE}`，`create` 拒绝枚举外字符串 | Darwin create 合法/非法策略两态断言，非法调用不注册 handle |
+| `services/platform_views.dart:789-792,827-832,989` — Android 方向只有 LTR=0 / RTL=1 | `view_methods::direction` 冻结两值；`setDirection` 从错误的 `0..3` 修正为只接受 0/1 | RTL 成功、3 被 `invalid_argument` 拒绝 |
+| `services/platform_views.dart:1359-1390` — Android create 的 `direction`/`hybrid`/`hybridFallback`/`left`/`top`/`params` | 类型化键 + 布尔/字节数组形状校验；`Uint8List` 走 `Value::Uint8List` | hybrid 字符串形式被拒绝，合法 Android create 成功 |
+| `services/platform_views.dart:1405-1410,1567-1571` — `rejectGesture` 可选整数 `gestureId` | `ARG_GESTURE_ID` 整数形状校验，缺失时保持可选语义 | 整数通过、字符串拒绝；`acceptGesture` 无 id 仍通过 |
+| `services/platform_views.dart:1472-1479` — offset 发送 double `top`/`left` | `ARG_TOP`/`ARG_LEFT` 要求 `F64`，修正此前错用 `x`/`y` 整数 | double 通过、整数拒绝 |
+| `services/platform_views.dart:1524-1532` — `_2` 通道 `isSurfaceControlEnabled` 是 opt-in 能力查询 | `PlatformViewBridge::with_surface_control(bool)` 注入宿主能力，默认 `false` | 注入 true 返回 `Success(Bool(true))` |
+| `services/platform_views.dart:78-85` — 宿主回调 `viewFocused(id)` 仅在已注册 focus handler 时分发 | `VIEW_FOCUSED` 加入方法表，校验 live view；不推进注册表单向生命周期（非输入事件） | live view 通过且生命周期保持 attached，disposed view 报错 |
+
+新增 4 项模块单测；合计 116 库单测 + 24 个集成测试组全绿。无渲染、IR、解释器改动，默认态金标零漂移。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
