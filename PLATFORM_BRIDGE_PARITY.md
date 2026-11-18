@@ -394,6 +394,17 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 宿主查询接口 `GapRow::needs_host_implementation(platform)` 按「disposition=unimplemented + 平台在范围内 + 缺口类型为 `NoHostImplementation`/`Undecided`」过滤，测试分别核对 Android/iOS/macOS 三组结果：例如 `flutter/status_bar` 只对 iOS、`flutter/sensitivecontent` 只对 Android、`flutter/menu`/`mousecursor` 只对桌面平台返回 true，IR 路径永不返回 true。清单由测试从编译期常量生成并与 `include_str!` 的 artifact 逐字比对，任何行漂移都会红灯；所有未桥接通道仍在编解码入口返回 typed `Unsupported("channel has no bridge route")`。无渲染、IR、解释器改动，默认态零漂移。
 
+### 第二十七轮：深度轮次 — 朝向枚举与尺寸投影边界修正
+
+`src/event_producers.rs` 修正 `DeviceOrientation` 的命名与 Flutter 声明顺序对齐：`PortraitUp=0`、`LandscapeLeft=1`、`PortraitDown=2`、`LandscapeRight=3`。此前 index 0 使用 `Portrait`、index 2 使用 `PortraitUp`，会让 index 2 被误读为竖屏正向；wire 值 0..3 与既有事件订阅完全不变，修正的是类型名与语义映射。新增 1 项单测：四个索引逐字对应 Flutter 枚举名；4..=u8::MAX 全部为 None；尺寸投影只产生 0/1，绝不从宽高伪造 180° 旋转值 2/3。
+
+| Flutter 源码（3.50-candidate） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `services/system_chrome.dart:43-60` — `DeviceOrientation` 声明顺序 `portraitUp, landscapeLeft, portraitDown, landscapeRight` | `DeviceOrientation::{PortraitUp,LandscapeLeft,PortraitDown,LandscapeRight}` 与 `from_index` 0..3 | 四值逐一断言，越界全 None |
+| `:50-60` — `landscapeLeft` 为逆时针 90°、`portraitDown` 为 180°；宽高只能区分横/竖 | `from_size` 只产出 index 0/1 | `u32::MAX` 边界宽高仍不伪造 index 2/3 |
+
+无渲染、IR、解释器改动，默认态零漂移。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。

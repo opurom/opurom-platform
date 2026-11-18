@@ -31,12 +31,23 @@
 use crate::display_geometry::{Posture, DPI_UNIT};
 use crate::system_events::SystemEvent;
 
-/// The four Flutter device orientations (`system_chrome.dart:43-70`).
+/// The four Flutter device orientations in declaration order
+/// (`services/system_chrome.dart:43-60`):
+/// `portraitUp`, `landscapeLeft`, `portraitDown`, `landscapeRight`.
+///
+/// The earlier `Portrait` / `PortraitUp` pair used indices 0/2 and was not
+/// a Flutter vocabulary: index 0 is specifically `portraitUp` and index 2
+/// is `portraitDown`. The wire values stay 0..3; only their names are now
+/// aligned with the pinned enum.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeviceOrientation {
-    Portrait,
-    LandscapeLeft,
+    /// `DeviceOrientation.portraitUp` (index 0).
     PortraitUp,
+    /// `DeviceOrientation.landscapeLeft` (index 1).
+    LandscapeLeft,
+    /// `DeviceOrientation.portraitDown` (index 2).
+    PortraitDown,
+    /// `DeviceOrientation.landscapeRight` (index 3).
     LandscapeRight,
 }
 
@@ -44,9 +55,9 @@ impl DeviceOrientation {
     /// Flutter's enum index, which is the wire value of the host event.
     pub fn index(self) -> u8 {
         match self {
-            Self::Portrait => 0,
+            Self::PortraitUp => 0,
             Self::LandscapeLeft => 1,
-            Self::PortraitUp => 2,
+            Self::PortraitDown => 2,
             Self::LandscapeRight => 3,
         }
     }
@@ -55,23 +66,23 @@ impl DeviceOrientation {
     /// guessed default.
     pub fn from_index(index: u8) -> Option<Self> {
         Some(match index {
-            0 => Self::Portrait,
+            0 => Self::PortraitUp,
             1 => Self::LandscapeLeft,
-            2 => Self::PortraitUp,
+            2 => Self::PortraitDown,
             3 => Self::LandscapeRight,
             _ => return None,
         })
     }
 
     /// The orientation implied by a physical size: width greater than height
-    /// is `landscapeLeft`, otherwise `portrait`. Hosts without a native
-    /// orientation signal use this projection (`display_geometry` decides
-    /// compact/expanded from the same comparison).
+    /// is `landscapeLeft` (index 1), otherwise `portraitUp` (index 0). Hosts
+    /// without a native orientation signal use this projection; it never
+    /// fabricates `portraitDown` or `landscapeRight`.
     pub fn from_size(width: u32, height: u32) -> Self {
         if width > height {
             Self::LandscapeLeft
         } else {
-            Self::Portrait
+            Self::PortraitUp
         }
     }
 }
@@ -147,9 +158,9 @@ mod tests {
 
     #[test]
     fn orientation_index_order_matches_flutter() {
-        assert_eq!(DeviceOrientation::Portrait.index(), 0);
+        assert_eq!(DeviceOrientation::PortraitUp.index(), 0);
         assert_eq!(DeviceOrientation::LandscapeLeft.index(), 1);
-        assert_eq!(DeviceOrientation::PortraitUp.index(), 2);
+        assert_eq!(DeviceOrientation::PortraitDown.index(), 2);
         assert_eq!(DeviceOrientation::LandscapeRight.index(), 3);
         for index in 0..4 {
             assert_eq!(
@@ -159,6 +170,50 @@ mod tests {
         }
         assert_eq!(DeviceOrientation::from_index(4), None);
         assert_eq!(DeviceOrientation::from_index(255), None);
+    }
+
+    #[test]
+    fn orientation_names_and_wire_indices_follow_flutter_declaration_order() {
+        // system_chrome.dart:43-60: portraitUp, landscapeLeft,
+        // portraitDown, landscapeRight. Index 0 and 2 are different named
+        // values; the old "Portrait" / "PortraitUp" pair was not a Flutter
+        // vocabulary.
+        assert_eq!(
+            DeviceOrientation::from_index(0),
+            Some(DeviceOrientation::PortraitUp)
+        );
+        assert_eq!(
+            DeviceOrientation::from_index(1),
+            Some(DeviceOrientation::LandscapeLeft)
+        );
+        assert_eq!(
+            DeviceOrientation::from_index(2),
+            Some(DeviceOrientation::PortraitDown)
+        );
+        assert_eq!(
+            DeviceOrientation::from_index(3),
+            Some(DeviceOrientation::LandscapeRight)
+        );
+        for index in 4..=u8::MAX {
+            assert_eq!(DeviceOrientation::from_index(index), None);
+        }
+        // A pure size projection only supplies the two unambiguous values;
+        // it must never fabricate the 180-degree rotation from dimensions.
+        for (width, height, expected) in [
+            (0, 1, 0u8),
+            (1, 0, 1),
+            (u32::MAX, u32::MAX - 1, 1),
+            (u32::MAX - 1, u32::MAX, 0),
+        ] {
+            let event = orientation_from_size(width, height);
+            assert_eq!(
+                event,
+                SystemEvent::Orientation {
+                    orientation: expected
+                }
+            );
+            assert!(expected != 2 && expected != 3);
+        }
     }
 
     #[test]
