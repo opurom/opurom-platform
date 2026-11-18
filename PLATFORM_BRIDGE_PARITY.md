@@ -441,6 +441,12 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 > 本地门禁说明：本轮全量 `cargo test --all-targets` 在本机有 3 个既存 GPU 测试失败（`gpu_animation_loop` 2 项、`gpu_presentation` 1 项，均为软件渲染器环境路径）。已用 stash 对比确认在干净 HEAD 上同样失败，且与本轮 `frozen_contracts` 改动无关；远端 Actions 同一 HEAD `cad736b` 为 6/6 成功。跳过这 3 项后本机其余测试全绿（154 库单测 + 所有非 GPU 集成测试），fmt 与 Linux/Windows 交叉 check 均通过。
 
+### 第三十轮：深度轮次 — GAP register 平台查询边界
+
+`gap_register::GapRow::needs_host_implementation` 此前先判断 `WITH_FUCHSIA` 再判断 `row.platforms`，使任何携带六键 `PLATFORM_KEYS` 的行在查询 `fuchsia` 时被静默跳过——尽管 register 明确认识 Fuchsia（Flutter 通道平台集合大于 `.flutter-plugins-dependencies` 六键集合，`flutter_plugins.dart:366-373`）。本轮改为先判 `row.platforms.contains`、再判已识别平台集合，语义为「只返回该行声明支持的平台」。新增 1 项单测：六键子集行对 Fuchsia 仍返回空（不被误判为遗漏）、未知平台恒 false、空 channel 名绝不命中 GAP。无渲染、IR、解释器改动，默认态零漂移。
+
+> 本地 GPU 环境基线同上轮：3 个既存 GPU 测试在本机因软件渲染器环境失败，干净 HEAD 上复现；远端 CI 全绿。本轮相关门禁（fmt、155 库单测、gap register 集成测试 8 项、Linux/Windows check）均通过。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。

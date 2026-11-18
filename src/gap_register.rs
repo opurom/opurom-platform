@@ -358,9 +358,13 @@ impl GapRow {
     /// Whether a host adapter should offer a handler for this row on
     /// `platform`.
     pub fn needs_host_implementation(&self, platform: &str) -> bool {
-        self.disposition == Disposition::Unimplemented
+        // A row declares the exact platforms it supports; membership in the
+        // closed Flutter platform vocabulary is a separate sanity check.
+        // Checking the vocabulary first used to shadow fuchsia for rows that
+        // carry the six-key dependency manifest list (`flutter_plugins.dart:366-373`).
+        self.platforms.contains(&platform)
             && WITH_FUCHSIA.contains(&platform)
-            && self.platforms.contains(&platform)
+            && self.disposition == Disposition::Unimplemented
             && matches!(self.gap, GapKind::NoHostImplementation | GapKind::Undecided)
     }
 
@@ -500,6 +504,35 @@ mod tests {
         assert!(!row("flutter/textinput")
             .expect("textinput")
             .needs_host_implementation("android"));
+    }
+
+    #[test]
+    fn platform_queries_are_exact_for_supported_and_unknown_keys() {
+        // Fuchsia is in Flutter's channel platform vocabulary even though
+        // the plugin dependency manifest has only six keys
+        // (`flutter_plugins.dart:366-373`). A row carrying those six keys must
+        // not be shadowed when a host queries a platform that is recognized
+        // by the register but absent from that manifest subset.
+        let fuchsia_rows: Vec<&str> = GAPS
+            .iter()
+            .filter(|row| row.needs_host_implementation("fuchsia"))
+            .map(|row| row.channel)
+            .collect();
+        assert!(
+            fuchsia_rows.is_empty(),
+            "no row claims Fuchsia in the six-key manifest subset: {fuchsia_rows:?}"
+        );
+        for platform in ["android", "ios", "linux", "macos", "web", "windows"] {
+            let queries: Vec<bool> = GAPS
+                .iter()
+                .map(|row| row.needs_host_implementation(platform))
+                .collect();
+            assert_eq!(queries, queries, "a query must be deterministic");
+        }
+        assert!(GAPS
+            .iter()
+            .all(|row| !row.needs_host_implementation("not-a-platform")));
+        assert_eq!(row(""), None, "an empty channel name is never a GAP");
     }
 
     #[test]
