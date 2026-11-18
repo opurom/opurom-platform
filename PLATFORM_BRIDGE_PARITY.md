@@ -242,6 +242,19 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 本轮只补确定性、可重放的畸形输入测试，不改实现；默认态零漂移，不触碰 IR/渲染/解释器。
 
+### 第二十四轮：深度轮次 — 插件生态规范：平台注入与权限合并
+
+`src/plugin_registry.rs` 新增平台注入描述符与审计函数，补全 manifest 声明与 Flutter 生成清单之间的规范断层，配合 `host_injection_audit` 的第 2 项单测走通注入缺口：
+
+| Flutter 源码（3.50-candidate） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `flutter_tools/lib/src/platform_plugins.dart:82-96,213-229,343,457` — `NativeOrDartPlugin.hasMethodChannel/hasFfi`、`ffiPlugin`、`DarwinPlugin.sharedDarwinSource` | `PlatformInjection { method_channel, ffi, shared_darwin_source }` + `native_build()` | 三个布尔字段的注入态可审计 |
+| `flutter_tools/lib/src/flutter_plugins.dart:484-497` — 按 `platformKeys` 生成插件列表；`native_build` 为 methodChannel/FFI | `audit_platform_injection` 对每一族（manifest, injection, platform）返回 typed 缺口 | 平台限制拒绝、无原生实现拒绝、sharedDarwinSource 仅在 iOS/macOS |
+| 平台验证加入 `darwin` 开关约束，避免 `sharedDarwinSource` 泄露到 Windows/Linux | `InjectionGap::SharedDarwinSourceOutsideDarwin` | 纯函数审计，始终拒绝 |
+| `hosts`/`permissions` 按目标平台取并集（`flutter_plugins.dart:380-420`，第十七轮已落地） | 与平台过滤的 `merge_permissions` 语义一致 | 无权限文件，确定性并集 |
+
+新增带类型化原因的测试，无渲染、IR、解释器改动，默认态零漂移。
+
 ### 第二十三轮：深度轮次 — 多平台宿主注入点审计
 
 `src/host_injection_audit.rs` 新增 `framework_channel_method`、`InjectionSlot` 与 `injection_slots()`，把「宿主注入点」从纯 capability 行细化为逐方法槽位；并新增 2 项单测：

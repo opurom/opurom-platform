@@ -21,6 +21,13 @@
 //!   explicit Flutter constraint whose minimum is `>= 2.11.0`.
 //! - `packages/flutter_tools/lib/src/commands/create_base.dart:731,735-804,811-813`
 //!   — Pub package names match `[a-z_][a-z0-9_]*` and are not Dart keywords.
+//! - `packages/flutter_tools/lib/src/flutter_plugins.dart:480-498` — the
+//!   generated per-platform plugin list carries `name`, `path`,
+//!   `native_build` (method-channel or FFI), `shared_darwin_source` and the
+//!   plugin-only dependency list.
+//! - `packages/flutter_tools/lib/src/platform_plugins.dart:82-96,213-229,343,457`
+//!   — `NativeOrDartPlugin.hasMethodChannel/hasFfi`, the `ffiPlugin` flag and
+//!   the Darwin `sharedDarwinSource` declaration.
 //!
 //! Opurom keeps the algorithm and the failure isolation, not the class
 //! structure: there is no runtime `PluginRegistry` object tree. A
@@ -89,6 +96,29 @@ impl PluginManifest {
     /// its app-facing interface.
     pub fn implements_package(&self) -> Option<&str> {
         self.interface.as_ref().map(|(id, _)| id.as_str())
+    }
+}
+
+/// Per-platform native injection descriptor for one manifest, projected from
+/// the platform block of a Flutter plugin declaration
+/// (`platform_plugins.dart:82-96,213-229,343,457`). `None` fields mean the
+/// platform block did not declare the capability; they are never guessed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PlatformInjection {
+    /// `pluginClass` is present (method-channel implementation).
+    pub method_channel: bool,
+    /// `ffiPlugin: true` (`platform_plugins.dart:213-229`).
+    pub ffi: bool,
+    /// `sharedDarwinSource: true` for iOS/macOS
+    /// (`platform_plugins.dart:93-96,343,457`).
+    pub shared_darwin_source: bool,
+}
+
+impl PlatformInjection {
+    /// Flutter writes `native_build` when a platform block has a method
+    /// channel or FFI implementation (`flutter_plugins.dart:494-497`).
+    pub fn native_build(&self) -> bool {
+        self.method_channel || self.ffi
     }
 }
 
@@ -651,6 +681,76 @@ pub fn merge_permissions(
     merged
 }
 
+/// A typed reason a manifest cannot be injected on a target platform.
+/// Flutter's generator asserts every listed plugin provides an implementation
+/// for the platform it is generated under (`flutter_plugins.dart:484-487`);
+/// Opurom keeps the same rule as a value instead of an assertion.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InjectionGap {
+    /// The manifest declares no support for the platform.
+    PlatformNotSupported { plugin: String, platform: String },
+    /// The platform block declares no method-channel or FFI implementation
+    /// and no shared Darwin source, so nothing can be injected natively.
+    NoNativeImplementation { plugin: String, platform: String },
+    /// `sharedDarwinSource` is declared for a platform other than iOS/macOS.
+    SharedDarwinSourceOutsideDarwin { plugin: String, platform: String },
+}
+
+impl std::fmt::Display for InjectionGap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InjectionGap::PlatformNotSupported { plugin, platform } => write!(
+                f,
+                "plugin {plugin} does not support platform {platform}"
+            ),
+            InjectionGap::NoNativeImplementation { plugin, platform } => write!(
+                f,
+                "plugin {plugin} has no native implementation on {platform}"
+            ),
+            InjectionGap::SharedDarwinSourceOutsideDarwin { plugin, platform } => write!(
+                f,
+                "plugin {plugin} declares sharedDarwinSource on {platform}, which is not iOS or macOS"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for InjectionGap {}
+
+/// Audit one plugin's native injection against a target platform. This is a
+/// pure function of the declaration: it never edits files, loads plugin code
+/// or registers a handler.
+///
+/// A manifest with no platform filter supports every platform (empty means
+/// all, matching the registrant's platform filter). A plugin that supports
+/// the platform but declares no native implementation is a typed gap, not a
+/// silent no-op (`flutter_plugins.dart:484-497`).
+pub fn audit_platform_injection(
+    manifest: &PluginManifest,
+    injection: &PlatformInjection,
+    target_platform: &str,
+) -> Result<(), InjectionGap> {
+    if !manifest.platforms.is_empty() && !manifest.platforms.contains(target_platform) {
+        return Err(InjectionGap::PlatformNotSupported {
+            plugin: manifest.name.clone(),
+            platform: target_platform.to_owned(),
+        });
+    }
+    if injection.shared_darwin_source && !matches!(target_platform, "ios" | "macos") {
+        return Err(InjectionGap::SharedDarwinSourceOutsideDarwin {
+            plugin: manifest.name.clone(),
+            platform: target_platform.to_owned(),
+        });
+    }
+    if !injection.native_build() && !injection.shared_darwin_source {
+        return Err(InjectionGap::NoNativeImplementation {
+            plugin: manifest.name.clone(),
+            platform: target_platform.to_owned(),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -714,6 +814,58 @@ mod tests {
         assert_eq!(plan.names(), vec!["all"]);
         let plan = resolve_registration(&manifests, Some("android")).unwrap();
         assert_eq!(plan.names(), vec!["all", "android-only"]);
+    }
+
+    #[test]
+    fn platform_injection_matches_generated_registrant_rules() {
+        let android_plugin = PluginManifest::new("camera_android", "1.0.0").on_platform("android");
+        let method_channel = PlatformInjection {
+            method_channel: true,
+            ..PlatformInjection::default()
+        };
+        assert!(audit_platform_injection(&android_plugin, &method_channel, "android").is_ok());
+        assert_eq!(
+            audit_platform_injection(&android_plugin, &method_channel, "ios"),
+            Err(InjectionGap::PlatformNotSupported {
+                plugin: "camera_android".into(),
+                platform: "ios".into(),
+            })
+        );
+        let ffi_only = PlatformInjection {
+            ffi: true,
+            ..PlatformInjection::default()
+        };
+        assert!(audit_platform_injection(&android_plugin, &ffi_only, "android").is_ok());
+        let no_impl = PlatformInjection::default();
+        assert_eq!(
+            audit_platform_injection(&android_plugin, &no_impl, "android"),
+            Err(InjectionGap::NoNativeImplementation {
+                plugin: "camera_android".into(),
+                platform: "android".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn shared_darwin_source_is_confined_to_darwin_platforms() {
+        let manifest = PluginManifest::new("url_launcher_darwin", "1.0.0")
+            .on_platform("ios")
+            .on_platform("macos");
+        let shared = PlatformInjection {
+            method_channel: true,
+            shared_darwin_source: true,
+            ..PlatformInjection::default()
+        };
+        assert!(audit_platform_injection(&manifest, &shared, "ios").is_ok());
+        assert!(audit_platform_injection(&manifest, &shared, "macos").is_ok());
+        let anywhere = PluginManifest::new("shared", "1.0.0");
+        assert_eq!(
+            audit_platform_injection(&anywhere, &shared, "linux"),
+            Err(InjectionGap::SharedDarwinSourceOutsideDarwin {
+                plugin: "shared".into(),
+                platform: "linux".into(),
+            })
+        );
     }
 
     #[test]

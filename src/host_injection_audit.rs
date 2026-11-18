@@ -143,6 +143,7 @@ pub fn injection_slots() -> Vec<InjectionSlot> {
 mod tests {
     use super::*;
     use crate::native_capabilities::CapabilityTable;
+    use crate::plugin_registry::InjectionGap;
 
     #[test]
     fn every_declared_capability_has_an_audit_row() {
@@ -173,9 +174,51 @@ mod tests {
     }
 
     #[test]
+    fn platform_injection_slots_report_injection_gaps() {
+        use crate::plugin_registry::{audit_platform_injection, PlatformInjection, PluginManifest};
+
+        // A camera-specific plugin on Android must not be injected on iOS.
+        let camera_android = PluginManifest::new("camera_android", "1.0.0").on_platform("android");
+        let injection = PlatformInjection {
+            method_channel: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            audit_platform_injection(&camera_android, &injection, "ios"),
+            Err(InjectionGap::PlatformNotSupported {
+                plugin: "camera_android".into(),
+                platform: "ios".into(),
+            })
+        );
+        // A shared darwin plugin must not report sharedDarwinSource on linux.
+        let shared = PluginManifest::new("shared", "1.0.0");
+        let shared_injection = PlatformInjection {
+            method_channel: true,
+            shared_darwin_source: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            audit_platform_injection(&shared, &shared_injection, "linux"),
+            Err(InjectionGap::SharedDarwinSourceOutsideDarwin {
+                plugin: "shared".into(),
+                platform: "linux".into(),
+            })
+        );
+        // A supporting platform triangle: any injection, no declared platform.
+        assert!(audit_platform_injection(
+            &PluginManifest::new("all", "1.0.0"),
+            &PlatformInjection {
+                method_channel: true,
+                ..Default::default()
+            },
+            "android",
+        )
+        .is_ok());
+    }
+
+    #[test]
     fn framework_capabilities_map_to_exact_flutter_platform_methods() {
         use crate::framework_channels::platform_methods;
-        // Mapping diagnostics: bare vibrate and type name must both resolve.
         assert_eq!(
             crate::framework_channels::haptic_type_name("vibrate"),
             Some(platform_methods::HAPTIC_VIBRATE)
