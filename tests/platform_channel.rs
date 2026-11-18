@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 
 use opurom_platform::platform_channel::{
     decode_envelope, decode_message, decode_method_call, encode_envelope, encode_message,
-    encode_method_call, error_codes, ChannelBuffer, ChannelKind, ChannelSpec, CodecError, Handler,
-    MethodCall, Reply, Value, EVENT_CANCEL, EVENT_LISTEN,
+    encode_method_call, error_codes, ChannelBuffer, ChannelKind, ChannelSpec, ChannelTable,
+    CodecError, Handler, MethodCall, Reply, Value, EVENT_CANCEL, EVENT_LISTEN,
 };
 
 fn ne_i32(n: i32) -> Vec<u8> {
@@ -291,6 +291,77 @@ fn channel_buffer_drops_oldest_and_tracks_overflow() {
     assert_eq!(buffer.pop(), Some(2));
     assert_eq!(buffer.pop(), Some(3));
     assert_eq!(buffer.dropped(), 2);
+}
+
+#[test]
+fn channel_table_is_name_indexed_and_deterministically_ordered() {
+    // Flutter's ChannelBuffers stores one entry per channel name in a Map
+    // (channel_buffers.dart:330,345,382-385). Opurom's table must therefore
+    // have one logical entry per name, replace on duplicate registration
+    // (binding.dart:654-675), and expose stable iteration order.
+    use opurom_platform::platform_channel::{ChannelKind, ChannelSpec, Handler};
+
+    fn noop(_state: *mut u8, _message: &[u8]) -> Result<Option<Vec<u8>>, CodecError> {
+        Ok(None)
+    }
+
+    let table = ChannelTable::new()
+        .with(
+            ChannelSpec {
+                name: "zeta",
+                kind: ChannelKind::BasicMessage,
+            },
+            Handler {
+                function: noop,
+                state: std::ptr::null_mut(),
+            },
+        )
+        .with(
+            ChannelSpec {
+                name: "alpha",
+                kind: ChannelKind::Event,
+            },
+            Handler {
+                function: noop,
+                state: std::ptr::null_mut(),
+            },
+        )
+        .with(
+            ChannelSpec {
+                name: "zeta",
+                kind: ChannelKind::Method { optional: true },
+            },
+            Handler {
+                function: noop,
+                state: std::ptr::null_mut(),
+            },
+        );
+    assert_eq!(table.len(), 2);
+    assert_eq!(table.names().collect::<Vec<_>>(), vec!["alpha", "zeta"]);
+    assert_eq!(
+        table.spec("zeta").unwrap().kind,
+        ChannelKind::Method { optional: true }
+    );
+    assert!(table.spec("missing").is_none());
+}
+
+#[test]
+fn channel_buffer_drains_every_excess_entry_on_overflow() {
+    // channel_buffers.dart:144,162-170 drops until length <= capacity - 1,
+    // not just one message per push. A burst into a shrunken buffer must
+    // leave exactly the newest `capacity` entries and count every drop.
+    let mut buffer = ChannelBuffer::with_capacity("opurom/burst", 3);
+    for n in 0..3 {
+        buffer.push(n);
+    }
+    buffer.push(3);
+    buffer.push(4);
+    assert_eq!(buffer.len(), 3);
+    assert_eq!(buffer.dropped(), 2);
+    assert_eq!(buffer.pop(), Some(2));
+    assert_eq!(buffer.pop(), Some(3));
+    assert_eq!(buffer.pop(), Some(4));
+    assert_eq!(buffer.pop(), None);
 }
 
 #[test]

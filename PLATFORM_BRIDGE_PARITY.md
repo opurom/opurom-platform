@@ -213,6 +213,16 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 `RegistryError` 增加 `Manifest(ManifestError)` 变体；`ManifestError` 的类型化原因可显示且可作为 `std::error::Error`。无渲染、IR、解释器改动，默认态零漂移。
 
+### 第二十轮：深度轮次 — 原生性能优化与溢出路径
+
+| Flutter 源码（3.50-candidate） | Opurom 优化 | 验证 |
+| --- | --- | --- |
+| `engine/src/flutter/lib/ui/channel_buffers.dart:330,345,382-385` — `Map<String, _Channel>` 按通道名 `putIfAbsent`/查找 | `ChannelTable` 从 `Vec` 线性扫描改为 `BTreeMap<&'static str, (ChannelSpec, Handler)>` 名称索引，`spec`/`dispatch` 为 O(log n)，`names()` 给出确定性排序 | 新增 name-indexed 测试：重复注册 last-wins、`names()` 稳定为 `["alpha","zeta"]`、missing spec 为 None |
+| `packages/flutter/lib/src/services/binding.dart:654-675` — `setMessageHandler` 按名替换单一 handler | `ChannelTable::with` 对同名直接覆盖，保持 Flutter 单 handler 语义 | 重复 `zeta` 注册后 kind 更新为最后一次值且 `len` 不变 |
+| `engine/src/flutter/lib/ui/channel_buffers.dart:144,162-170` — `_dropOverflowMessages(capacity-1)` 丢弃所有超限旧消息 | `ChannelBuffer::push`/`push_stamped` 以 `while` 排空所有超出容量的旧项，`dropped()` 累计每一项；不再只丢一条 | 新增 burst 测试：容量 3 连推 5 条，仅保留最新 3 条且 `dropped=2` |
+
+优化只改变内部索引与溢出循环，不变更 wire 字节、错误码或生命周期；默认态零漂移，不触碰 IR/渲染/解释器。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。

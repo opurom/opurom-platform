@@ -25,6 +25,14 @@
 //!   0→1 / cancel 1→0), `:622-633` (`OptionalMethodChannel`).
 //! - `engine/src/flutter/lib/ui/channel_buffers.dart:75-81,257-260,321,343-354`
 //!   (per-channel FIFO, default capacity 1, drop-oldest overflow).
+//! - `engine/src/flutter/lib/ui/channel_buffers.dart:330,345,382-385` —
+//!   channels are held in `Map<String, _Channel>` with `putIfAbsent` and
+//!   name-keyed lookup. Opurom projects this to a `BTreeMap<&str, …>` index so
+//!   dispatch is O(log n) instead of a Vec scan while keeping a deterministic
+//!   iteration order (no hash-map iteration in compiled output).
+//! - `packages/flutter/lib/src/services/binding.dart:654-675` —
+//!   `setMessageHandler` replaces the handler for a name; the table's `with`
+//!   keeps that last-handler-wins rule at build time.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -675,33 +683,32 @@ impl Eq for Handler {}
 /// registration; rebuilding the table is the explicit replacement mechanism.
 #[derive(Default)]
 pub struct ChannelTable {
-    entries: Vec<(ChannelSpec, Handler)>,
+    entries: BTreeMap<&'static str, (ChannelSpec, Handler)>,
 }
 
 impl ChannelTable {
     pub fn new() -> Self {
         Self {
-            entries: Vec::new(),
+            entries: BTreeMap::new(),
         }
     }
 
     /// Register a channel. Duplicate names mirror Flutter's "last handler
-    /// wins" `setMessageHandler` semantics (`binary_messenger.dart:66-80`),
-    /// but the whole table is built before the event loop starts.
+    /// wins" `setMessageHandler` semantics (`binding.dart:654-675`),
+    /// but the whole table is built before the event loop starts. The
+    /// name-keyed index mirrors `ChannelBuffers._channels` (`channel_buffers.dart:330,382-385`).
     pub fn with(mut self, spec: ChannelSpec, handler: Handler) -> Self {
-        if let Some(entry) = self.entries.iter_mut().find(|(s, _)| s.name == spec.name) {
-            entry.1 = handler;
-        } else {
-            self.entries.push((spec, handler));
-        }
+        self.entries.insert(spec.name, (spec, handler));
         self
     }
 
     pub fn spec(&self, name: &str) -> Option<&ChannelSpec> {
-        self.entries
-            .iter()
-            .find(|(s, _)| s.name == name)
-            .map(|(s, _)| s)
+        self.entries.get(name).map(|(spec, _)| spec)
+    }
+
+    /// Deterministic name order, matching the sorted `BTreeMap` keys.
+    pub fn names(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.entries.keys().copied()
     }
 
     pub fn len(&self) -> usize {
@@ -725,7 +732,7 @@ impl ChannelTable {
         name: &str,
         message: &[u8],
     ) -> Result<Option<Vec<u8>>, CodecError> {
-        let Some((_, handler)) = self.entries.iter().find(|(s, _)| s.name == name) else {
+        let Some((_, handler)) = self.entries.get(name) else {
             return Ok(None);
         };
         unsafe { (handler.function)(handler.state, message) }
@@ -781,10 +788,12 @@ impl<T> ChannelBuffer<T> {
         self.queue.is_empty()
     }
 
-    /// Returns `true` when accepted, `false` when the message was dropped
-    /// because capacity is 0 (Flutter returns false and reports the drop).
+    /// Returns `true` when the message was accepted. Flutter's
+    /// `_dropOverflowMessages` removes *all* entries beyond `capacity - 1`
+    /// (`channel_buffers.dart:144,162-170`); the Opurom counter records how
+    /// many older messages were dropped. Capacity is always positive here.
     pub fn push(&mut self, message: T) -> bool {
-        if self.queue.len() >= self.capacity {
+        while self.queue.len() >= self.capacity {
             self.queue.pop_front();
             self.dropped += 1;
         }
@@ -804,7 +813,7 @@ impl<T> ChannelBuffer<T> {
     /// Stamps an incoming message with a monotonic sequence number so
     /// consumers can detect FIFO order without wall-clock time.
     pub fn push_stamped(&mut self, message: T, sequence: u64) -> bool {
-        if self.queue.len() >= self.capacity {
+        while self.queue.len() >= self.capacity {
             self.queue.pop_front();
             self.dropped += 1;
         }
