@@ -116,10 +116,20 @@ macOS 通知映射（`objc2-app-kit` 0.3.2 静态通知名）：
 
 `Capability` 由 12 类扩展至 14 类（新增 `Camera` / `VideoPlayer`），方法与参数均取自 pinned 源码；宿主无处理器时返回 typed `unimplemented`。架构红线不破：无运行时对象树、无解释器、IR 未触碰。
 
+### 第七轮：插件注册执行端（P1 第三项）
+
+| Flutter 源码（3.50-candidate） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `flutter_tools/lib/src/flutter_plugins.dart:528-551` — 每插件一次 `plugins.add`，各自 try/catch 隔离失败 | `plugin_executor::execute_plan` 按冻结计划逐项调用注入函数，失败记录 typed reason 后继续 | 3 项单测：依赖顺序 + 失败隔离、缺函数 typed 失败、失败插件不合并权限 |
+| `flutter_plugins.dart:225-292` — 依赖排序 | 复用 `resolve_registration` 冻结计划 | 断言顺序 `camera → path → share` |
+| `flutter_plugins.dart:380-420` — 平台权限并集 | `RegistrationReport.permissions()` 只合并已注册插件 | `perm.b` 被失败插件排除 |
+
+执行端不引入运行时插件对象树：宿主只提供 `RegistrationFn` 函数指针表，执行结果是不可变 `RegistrationReport`，IR 与渲染管线未触碰。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 六轮全量通过；第六轮新增媒体能力 2 项单测，合计 100 个库单测 + 23 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0）。
+- 结果：2026-11-18 七轮全量通过；第七轮新增注册执行端 3 项单测，合计 103 个库单测 + 23 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0）。
 - 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）；新增模块内单测 10 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）

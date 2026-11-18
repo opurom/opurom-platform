@@ -825,3 +825,5 @@ pub mod system_events;
 pub mod event_producers;
 // Deterministic plugin registration contract.
 pub mod plugin_registry;
+// Frozen registration plan executor with isolated failures.
+pub mod plugin_executor;
