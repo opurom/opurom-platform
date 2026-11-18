@@ -363,11 +363,25 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 审计器自检覆盖「缺包」与「错误 GAP 分类」两类探针；报告行全部以 `|` 分隔四字段，可直接被机器消费。首次远端 CI 发现 `flutter-plugins` 不在本仓 clone 列表内，现改为「有快照时交叉核对、无快照时用冻结表独立审计」，并新增 CI 缺快照路径的测试。无渲染、IR、解释器改动，默认态零漂移。
 
+### 第三十一轮：深度轮次 — 未桥接框架通道处置矩阵
+
+新增 `tests/declared_channel_disposition.rs`（7 项）：为 `channel_contract` 中 19 条已声明未桥接的 `flutter/*` 通道逐条固化处置结论。每条通道必须落入两类之一：`ir_path`（Opurom 自有 IR 路径已承载同一机制，并在测试中验证对应源码符号存在）或 `unimplemented`（无宿主能力，继续由编解码入口 typed 拒绝）。报告格式为 `channel|codec|disposition|ir_path|source_pin`，可直接机器消费。
+
+| 处置 | 通道 | 依据 |
+| --- | --- | --- |
+| `ir_path` | `flutter/backgesture`、`flutter/keyevent` | `input_bridge.rs::InputRouter` 承载 pointer/gesture 输入；Flutter 对应 `services/back_gesture.dart` 与 `services/raw_keyboard.dart:379,757` |
+| `ir_path` | `flutter/textinput` | `ime.rs::ImeStatus` 承载 IME 文本输入；`system_channels.dart:293-296` |
+| `ir_path` | `flutter/accessibility` | `a11y.rs::map_a11y_tree` 承载无障碍树；`system_channels.dart:413-416` |
+| `ir_path` | `flutter/keyboard` | `event_producers.rs::keyboard_visibility` 承载键盘可见性；`services/hardware_keyboard.dart:603-606` |
+| `unimplemented` | 其余 14 条（navigation/status_bar/processtext/scribe/spellcheck/undomanager/skia/mousecursor/restoration/deferredcomponent/localization/menu/contextmenu/sensitivecontent） | 每条均逐字取自 `system_channels.dart` 对应声明行；无 Opurom 宿主能力，不造通道 |
+
+所有 19 条通道在三个编码/解码入口（消息、方法调用、错误信封）都返回 `Unsupported("channel has no bridge route")`；`StringCodec` 仍只属于已桥接的生命周期通道。无渲染、IR、解释器改动，默认态零漂移。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 三十轮本地全量通过；合计 141 个库单测 + 35 个集成测试组、共 397 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
-- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）、`tests/channel_codec_contract.rs`（10）、`tests/capability_channel_alignment.rs`（5）；新增模块内单测 18 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
+- 结果：2026-11-18 三十一轮本地全量通过；合计 141 个库单测 + 36 个集成测试组、共 404 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
+- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）、`tests/channel_codec_contract.rs`（10）、`tests/capability_channel_alignment.rs`（5）、`tests/declared_channel_disposition.rs`（7）；新增模块内单测 18 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）
 
