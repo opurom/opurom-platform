@@ -1,0 +1,23 @@
+flutter/accessibility|standard|ir_path|ir_path|android,ios,linux,macos,web,windows|a11y.rs::map_a11y_tree|system_channels.dart:413-416; src/a11y.rs
+flutter/backgesture|standard|ir_path|ir_path|android|input_bridge.rs::InputRouter|system_channels.dart:98 (Android U+ only); services/back_gesture.dart
+flutter/contextmenu|json|unimplemented|no_host_implementation|web||system_channels.dart:576-579 (web only)
+flutter/deferredcomponent|standard|unimplemented|no_host_implementation|android||system_channels.dart:480-501 (Android only)
+flutter/keyboard|standard|ir_path|ir_path|android,ios,linux,macos,web,windows|event_producers.rs::keyboard_visibility|system_channels.dart:581-599; services/hardware_keyboard.dart:603-606
+flutter/keyevent|json|ir_path|ir_path|android,fuchsia|input_bridge.rs::InputRouter|system_channels.dart:350-373 (Android/Fuchsia only); services/raw_keyboard.dart:379,757
+flutter/localization|json|unimplemented|no_host_implementation|android,ios,linux,macos,web,windows||system_channels.dart:503-517
+flutter/menu|standard|unimplemented|no_host_implementation|linux,macos,windows||system_channels.dart:519-566 (desktop platforms)
+flutter/mousecursor|standard|unimplemented|no_host_implementation|linux,macos,windows||system_channels.dart:441-450 (desktop platforms)
+flutter/navigation|json|unimplemented|no_host_implementation|android,ios,linux,macos,web,windows||system_channels.dart:68-79
+flutter/processtext|standard|unimplemented|no_host_implementation|android||system_channels.dart:206-210 (Android only)
+flutter/restoration|standard|unimplemented|undecided|android,ios||system_channels.dart:452-478 (Android and iOS only)
+flutter/scribe|json|unimplemented|no_host_implementation|android||system_channels.dart:298-322 (Android only)
+flutter/sensitivecontent|standard|unimplemented|no_host_implementation|android||system_channels.dart:601-616 (Android only)
+flutter/skia|json|unimplemented|no_host_implementation|android,ios,linux,macos,web,windows||system_channels.dart:432-439
+flutter/spellcheck|standard|unimplemented|no_host_implementation|android,ios||system_channels.dart:324-342 (Android and iOS only)
+flutter/status_bar|json|unimplemented|no_host_implementation|ios||system_channels.dart:190-204 (iOS only)
+flutter/textinput|json|ir_path|ir_path|android,ios,linux,macos,web,windows|ime.rs::ImeStatus|system_channels.dart:212-296; src/ime.rs
+flutter/undomanager|json|unimplemented|no_host_implementation|android,ios,linux,macos,web,windows||system_channels.dart:344-348
+plugins.flutter.io/connectivity|standard|unimplemented|no_plugin_source|android,ios,linux,macos,web,windows||no connectivity plugin source in the local snapshot
+plugins.flutter.io/device_info|standard|unimplemented|no_plugin_source|android,ios,linux,macos,web,windows||no device_info plugin source in the local snapshot; local projections are not parity
+plugins.flutter.io/permission_handler|standard|unimplemented|no_plugin_source|android,ios,linux,macos,web,windows||no permission plugin source in the local snapshot
+plugins.flutter.io/share|standard|unimplemented|no_plugin_source|android,ios,linux,macos,web,windows||no share plugin source in the local snapshot; Share.invoke is frozen on flutter/platform

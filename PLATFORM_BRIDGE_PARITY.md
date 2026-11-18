@@ -377,15 +377,28 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 所有 19 条通道在三个编码/解码入口（消息、方法调用、错误信封）都返回 `Unsupported("channel has no bridge route")`；`StringCodec` 仍只属于已桥接的生命周期通道。无渲染、IR、解释器改动，默认态零漂移。
 
-### 第二十六轮：深度轮次 — 宿主注入失败路径收敛
+### 第三十三轮：深度轮次 — 宿主注入失败路径收敛
 
 `tests/host_injection_failure_paths.rs` 新增 `registration_failures_are_typed_isolated_and_replayable`：重复 manifest 名无法生成注册计划；冻结计划中注入 `path` 宿主面失败时，`camera`/`share` 仍注册，权限集合只合并成功插件；重复执行得到完全一致报告，计划本身不变。源码依据 `flutter_tools/lib/src/flutter_plugins.dart:480-498,528-551`（按平台生成与逐插件 try/catch）、`:380-420`（权限并集）。无渲染、IR、解释器改动，默认态零漂移。
+### 第三十二轮：深度轮次 — 统一宿主注入 GAP 清单
+
+新增 `src/gap_register.rs`（6 项模块内单测）与 `tests/gap_register_contract.rs`（8 项集成测试），生成单一机器可读清单 `tests/fixtures/gap-register.psv`（23 行）。每行七字段：`channel|codec|disposition|gap|platforms|ir_path|pin`，把此前分散在能力三方审计、通道处置矩阵、插件注入审计中的缺口合并为一个宿主适配器消费入口。
+
+| Flutter 源码（3.50-candidate） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `services/system_channels.dart:68-616` — 19 条未桥接框架通道的声明、codec 与平台范围 | `GAPS`（19 行） | 与 `FRAMEWORK_CHANNELS` 的 `Declared` 集合逐名相等；codec 取实现契约；5 条 `ir_path` 与 14 条 `unimplemented` 分类与第三十一轮矩阵一致 |
+| `flutter_tools/lib/src/flutter_plugins.dart:366-386` — `.flutter-plugins-dependencies` 的六个平台键 | `PLATFORM_KEYS` + 每行的 `platforms` 字段 | 落表前校验平台名；`flutter/keyevent` 单独标注 Android/Fuchsia（`system_channels.dart:350-373`），Fuchsia 不在六个 manifest 键内但属于官方通道平台 |
+| `services/platform_channel.dart:291-299` — `MethodChannel` 默认 `StandardMethodCodec` | 每行的 `codec` 列 | 19 条框架通道与 `channel_contract` 声明一致；4 条插件 GAP 沿用快照默认 codec |
+| 本地插件快照缺失的 device_info/connectivity/permission_handler/share | `CAPABILITY_GAPS`（4 行） | `NoPluginSource` 且不在插件通道清单内；缺口本身就是审计结论，不伪造已声明插件 |
+| Opurom 自有 IR 路径 `input_bridge` / `ime` / `a11y` / `event_producers` | `ir_path` 列 | 测试读取 crate 源码确认每个 `file.rs::symbol` 真实存在 |
+
+宿主查询接口 `GapRow::needs_host_implementation(platform)` 按「disposition=unimplemented + 平台在范围内 + 缺口类型为 `NoHostImplementation`/`Undecided`」过滤，测试分别核对 Android/iOS/macOS 三组结果：例如 `flutter/status_bar` 只对 iOS、`flutter/sensitivecontent` 只对 Android、`flutter/menu`/`mousecursor` 只对桌面平台返回 true，IR 路径永不返回 true。清单由测试从编译期常量生成并与 `include_str!` 的 artifact 逐字比对，任何行漂移都会红灯；所有未桥接通道仍在编解码入口返回 typed `Unsupported("channel has no bridge route")`。无渲染、IR、解释器改动，默认态零漂移。
 
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 三十一轮本地全量通过；合计 141 个库单测 + 36 个集成测试组、共 404 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
-- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）、`tests/channel_codec_contract.rs`（10）、`tests/capability_channel_alignment.rs`（5）、`tests/declared_channel_disposition.rs`（7）；新增模块内单测 18 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
+- 结果：2026-11-18 三十三轮本地全量通过；合计 147 个库单测 + 38 个集成测试组、共 419 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
+- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）、`tests/channel_codec_contract.rs`（10）、`tests/capability_channel_alignment.rs`（5）、`tests/declared_channel_disposition.rs`（7）、`tests/gap_register_contract.rs`（8）；新增模块内单测 24 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）
 

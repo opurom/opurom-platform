@@ -819,6 +819,8 @@ pub mod channel_contract;
 pub mod native_capabilities;
 // Host backends for preferences and path provider.
 pub mod native_backends;
+// Unified machine-readable register of unimplemented surfaces.
+pub mod gap_register;
 // Media capability contract: camera and video playback.
 pub mod media_capabilities;
 // Unified system event taxonomy and dispatcher.
