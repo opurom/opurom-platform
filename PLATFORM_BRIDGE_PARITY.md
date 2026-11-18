@@ -96,16 +96,27 @@ macOS 通知映射（`objc2-app-kit` 0.3.2 静态通知名）：
 
 实现要点：观察者经 `NSNotificationCenter.addObserverForName:object:queue:usingBlock:` 注册在主队列，与宿主事件循环同线程；令牌由 `LifecycleObserver` 持有，drop 即撤销注册；事件先入窗口自身 `VecDeque<Lifecycle>`，由 `drain_lifecycle()` FIFO 取出，宿主再送入统一输入流。架构红线不破：无运行时解释器、无对象树、IR 未触碰。
 
+### 第五轮：系统事件宿主生产者（P1 第一项）
+
+| Flutter 源码（3.50-candidate） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `services/system_chrome.dart:43-70` — `DeviceOrientation` 四值索引顺序 | `DeviceOrientation` 枚举 + `from_index`/`from_size` | 四索引逐字断言，越界返回 `None` 不猜测 |
+| `widgets/media_query.dart:916-935` — `platformBrightnessOf` 从平台视图配置派生暗色模式 | `brightness(dark)` 纯函数生产者 | 亮暗两态 wire 往返断言 |
+| `services/system_channels.dart:599` — 键盘可见性通道 | `keyboard_visibility(visible, height)` | 带高度/无高度两态断言 |
+| `services/binding.dart:174-182` — 唯一框架事件 `memoryPressure` | `memory_pressure()` | payload 逐字段对齐 |
+
+新增 `src/event_producers.rs`（237 行）：全部为纯函数（无时钟、无随机、无隐藏状态），从原始 OS 事实到封闭事件值的确定性映射；折叠姿态投影复用 `display_geometry` 的尺寸规则；DPI 换算走共享 `DPI_UNIT` 定点网格。6 项单测覆盖索引顺序、尺寸投影、姿态投影、wire 往返、payload 精确性。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 四轮全量通过；第四轮新增 macOS 生命周期观察者（编译期验证，5 文件 +175 行），合计 92 个库单测 + 23 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0）。
+- 结果：2026-11-18 五轮全量通过；第五轮新增系统事件生产者 6 项单测，合计 98 个库单测 + 23 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0）。
 - 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）；新增模块内单测 10 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）
 
 1. **设备信息/网络/权限/分享**：本地 `flutter-plugins` 快照无官方插件源码，按硬约束不能自创 API；需先取到 pinned 官方源码再实现。已用 typed `unimplemented` 占位，不伪造成功。
 2. **真实宿主后端**：`PreferencesBackend`、`PathResolver`、`UrlLauncherBackend`、`ImagePickerBackend` 均已落地并接入 `CapabilityTable`；macOS 生命周期观察者已接入；各端原生 opener/picker 表面仍需 mobile/web/desktop 宿主注入实现。
-3. **系统事件生产者**：`SystemEventDispatcher` 只做分发；宿主侧键盘/旋转/亮度/省电/刷新率的 OS 信号采集尚未接入。
+3. **系统事件生产者**：纯函数生产者已落地（`event_producers.rs`）；宿主侧 OS 信号采集点（Android/iOS 原生回调）尚未接入，需各宿主注入。
 4. **插件注册执行端**：`RegistrationPlan` 是冻结计划；`opurom-plugins` CLI 与 `opurom-cli` 各端工程生成尚未消费该计划。
 5. **跨仓库对齐**：`opurom-runtime-adapters` 的 9 类能力码与此处 12 类契约尚未统一命名，需 adapters 侧协同（本模块不修改他仓库代码）。
