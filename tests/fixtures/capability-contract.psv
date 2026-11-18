@@ -16,6 +16,7 @@ device_info|device_info.displayGeometry|displayGeometry|value||value|unimplement
 device_info|device_info.dpiScale|dpiScale|value||value|unimplemented|no device_info plugin source in the local snapshot; local projections are not parity|services/message_codecs.dart:467,600-617,628-663
 device_info|device_info.graphicsBackend|graphicsBackend|value||value|unimplemented|no device_info plugin source in the local snapshot; local projections are not parity|services/message_codecs.dart:467,600-617,628-663
 device_info|device_info.viewport|viewport|value||value|unimplemented|no device_info plugin source in the local snapshot; local projections are not parity|services/message_codecs.dart:467,600-617,628-663
+device_info|device_info||none||null|unimplemented|no device_info plugin source in the local snapshot; local projections are not parity|no official pin; local projections are not parity
 file_storage|file_storage.keys|keys|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
 file_storage|file_storage.read|read|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
 file_storage|file_storage.remove|remove|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
@@ -29,6 +30,7 @@ image_picker|image_picker.pickImage|pickImage|value||value|invalid_argument|none
 image_picker|image_picker.pickMultiImage|pickMultiImage|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
 image_picker|image_picker.pickVideo|pickVideo|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
 image_picker|image_picker.retrieve|retrieve|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
+network|network||none||null|unimplemented|no connectivity plugin source in the local snapshot|no official pin; local projections are not parity
 notifications|notifications.cancel|cancel|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
 notifications|notifications.post|post|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663
 path_provider|path_provider.getApplicationDocumentsDirectory|getApplicationDocumentsDirectory|value||value|invalid_argument|none|services/message_codecs.dart:467,600-617,628-663

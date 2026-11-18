@@ -99,6 +99,24 @@ fn main() {
         }
     }
 
+    // Every capability with a typed GAP reason must appear in the report,
+    // even when its local method table is empty (`network`). A methodless
+    // marker row keeps host generators from silently skipping it.
+    for contract in CONTRACTS {
+        if contract.methods.is_empty() {
+            let marker = format!(
+                "{}|{}||none||null|unimplemented|{}|{}",
+                contract.capability.as_str(),
+                contract.capability.as_str(),
+                contract.gap_reason,
+                contract.pin
+            );
+            if seen.insert(marker.clone(), ()).is_none() {
+                rows.push(marker);
+            }
+        }
+    }
+
     rows.sort();
     rows.dedup();
     std::fs::write(&out, format!("{}\n", rows.join("\n"))).expect("write report");
