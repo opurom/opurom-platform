@@ -418,15 +418,28 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 `frozen_contracts` 与统一 GAP 清单双向交叉验证：能力集合一致、`gap_reason` 与 register 的 `pin` 字段逐字一致、artifact 的 4 条 plugin GAP 行覆盖所有冻结 pin；`validate_arguments` 只校验 wire 形状（裸字符串/带键 map/null），不派发也不构造 `MethodCall`。typed `unavailable_reason` 文案同步为 register 的正式措辞，相关既有测试一并更新。无渲染、IR、解释器改动，默认态零漂移。
 
-### 第二十八轮：深度轮次 — 冻结 GAP API 的 map 键补全
+### 第三十六轮：深度轮次 — 冻结 GAP API 的 map 键补全
 
 承接上轮 `_pluginGapApiShapes`：`FrozenMethod.argument_key: Option<&'static str>` 只能冻结一个 map 键，导致 `System.exitApplication` 的 `exitCode`（`services/binding.dart:525-528` 明确与 `type` 一起写入）未被校验。本轮改为 `argument_keys: &'static [&'static str]`，`Share.invoke` 为空切片，`System.exitApplication` 冻结 `["type","exitCode"]`；`validate_arguments` 要求所有冻结键都存在，缺任一键返回 `frozen method map is missing a required key`。仍是纯数据/wire 形状校验，不派发、不实现任何 GAP 能力。新增回归断言：只含 `type` 或只含 `exitCode` 均被拒，完整 map 通过。无渲染、IR、解释器改动，默认态零漂移。
+### 第三十五轮：深度轮次 — 冻结契约失败路径统一
+
+新增 `tests/frozen_contract_failure_paths.rs`（7 项），并给 `src/frozen_contracts.rs` 补上最小实现 `validate_call`：形状校验失败时返回 typed `invalid_argument` 平台错误，形状合法时仍不合成任何回复（宿主尚未注入 GAP 实现），因此永远不伪造 `Success(Null)`。
+
+| Flutter 源码（3.50-candidate） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `services/message_codecs.dart:467` — 无法写入的值抛 `ArgumentError.value(value)` | `validate_arguments` 的三类失败原因映射为 `error_codes::INVALID_ARGUMENT` | 错类型、缺键、空值全部返回 `Reply::PlatformError{code:"invalid_argument"}` |
+| `services/message_codecs.dart:608-616` — 方法调用必须解码为字符串方法 + 值参数且无尾随字节 | frozen method 的 name/argument 校验 | `Share.invoke` 接受裸字符串、拒绝 I32/Null/map；`System.exitApplication` 接受含 `type` 键的 map、拒绝 Null/字符串/缺 `type` 或缺 `exitCode` |
+| `services/message_codecs.dart:628-663` — 标准错误信封 `[1, code, message, details]` + 可选 stacktrace | `encode_envelope`/`decode_envelope` 往返 | 错误首字节为 1，typed 错误逐字段存活 |
+| `services/platform_channel.dart:600-613` — handler 抛错转错误信封，null reply 才是 missing plugin | `validate_call` 只返回错误或不返回回复 | 合法调用返回 `None`（无实现、不伪造成功）；失败调用的错误可编码为标准信封 |
+| `services/message_codec.dart:108-122` — `PlatformException` 需 code，message 可选 | `Reply::PlatformError` | code 固定为 `invalid_argument`，message 带冻结方法名与失败原因，details 为 Null |
+
+失败路径是纯函数：重复 10 次相同非法调用得到相同 reply；失败后 GAP register 的行数不变、4 类能力的 `unavailable_reason()` 不变；合法调用仍不前进到成功。本地全量测试使用稳定 release renderer 作为 sibling fixture（另一自动化正在重建 debug renderer，与该路径无关）。无渲染、IR、解释器改动，默认态零漂移。
 
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 三十四轮本地全量通过；合计 153 个库单测 + 40 个集成测试组、共 433 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
-- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）、`tests/channel_codec_contract.rs`（10）、`tests/capability_channel_alignment.rs`（5）、`tests/declared_channel_disposition.rs`（7）、`tests/gap_register_contract.rs`（8）、`tests/frozen_contract_crosscheck.rs`（8）；新增模块内单测 29 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
+- 结果：2026-11-18 三十六轮本地全量通过；合计 153 个库单测 + 41 个集成测试组、共 440 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
+- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）、`tests/channel_codec_contract.rs`（10）、`tests/capability_channel_alignment.rs`（5）、`tests/declared_channel_disposition.rs`（7）、`tests/gap_register_contract.rs`（8）、`tests/frozen_contract_crosscheck.rs`（8）、`tests/frozen_contract_failure_paths.rs`（7）；新增模块内单测 29 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）
 

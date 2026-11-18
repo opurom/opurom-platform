@@ -33,7 +33,7 @@
 
 use crate::framework_channels::platform_methods;
 use crate::native_capabilities::Capability;
-use crate::platform_channel::Value;
+use crate::platform_channel::{error_codes, MethodCall, Reply, Value};
 
 /// The wire contract of one frozen capability surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -190,6 +190,25 @@ pub fn validate_arguments(method: &FrozenMethod, arguments: &Value) -> Result<()
             Ok(())
         }
     }
+}
+
+/// A capability frozen method that has no host implementation yet.
+///
+/// A host adapter that wants to support one of the GAP capabilities calls
+/// this function instead of writing its own argument checks. A shape
+/// failure answers the same typed `invalid_argument` platform error that
+/// Dart's `ArgumentError` becomes on the framework channel
+/// (`services/message_codecs.dart:467`, `message_codec.dart:108-122`);
+/// a well-shaped call still answers `unimplemented`, so this function can
+/// never fabricate a success for a GAP capability.
+pub fn validate_call(method: &FrozenMethod, call: &MethodCall) -> Option<Reply> {
+    validate_arguments(method, &call.arguments)
+        .err()
+        .map(|reason| Reply::PlatformError {
+            code: error_codes::INVALID_ARGUMENT.to_owned(),
+            message: Some(format!("{}: {reason}", method.name)),
+            details: Value::Null,
+        })
 }
 
 #[cfg(test)]
