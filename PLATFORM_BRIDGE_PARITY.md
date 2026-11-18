@@ -418,6 +418,10 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 `frozen_contracts` 与统一 GAP 清单双向交叉验证：能力集合一致、`gap_reason` 与 register 的 `pin` 字段逐字一致、artifact 的 4 条 plugin GAP 行覆盖所有冻结 pin；`validate_arguments` 只校验 wire 形状（裸字符串/带键 map/null），不派发也不构造 `MethodCall`。typed `unavailable_reason` 文案同步为 register 的正式措辞，相关既有测试一并更新。无渲染、IR、解释器改动，默认态零漂移。
 
+### 第二十八轮：深度轮次 — 冻结 GAP API 的 map 键补全
+
+承接上轮 `_pluginGapApiShapes`：`FrozenMethod.argument_key: Option<&'static str>` 只能冻结一个 map 键，导致 `System.exitApplication` 的 `exitCode`（`services/binding.dart:525-528` 明确与 `type` 一起写入）未被校验。本轮改为 `argument_keys: &'static [&'static str]`，`Share.invoke` 为空切片，`System.exitApplication` 冻结 `["type","exitCode"]`；`validate_arguments` 要求所有冻结键都存在，缺任一键返回 `frozen method map is missing a required key`。仍是纯数据/wire 形状校验，不派发、不实现任何 GAP 能力。新增回归断言：只含 `type` 或只含 `exitCode` 均被拒，完整 map 通过。无渲染、IR、解释器改动，默认态零漂移。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。

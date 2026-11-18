@@ -40,8 +40,10 @@ use crate::platform_channel::Value;
 pub struct FrozenMethod {
     /// The method name on the wire.
     pub name: &'static str,
-    /// The argument map key, when the official call passes a map.
-    pub argument_key: Option<&'static str>,
+    /// All argument map keys, when the official call passes a map.
+    /// Flutter sends a complete argument map, so validation must require
+    /// every key the pinned call writes (`binding.dart:525-528`).
+    pub argument_keys: &'static [&'static str],
     /// The official argument type.
     pub argument: ArgType,
     /// The official return type.
@@ -105,7 +107,7 @@ pub struct FrozenContract {
 /// `widgets/selectable_region.dart:1595-1600`).
 pub const SHARE_METHODS: &[FrozenMethod] = &[FrozenMethod {
     name: platform_methods::SHARE_INVOKE,
-    argument_key: None,
+    argument_keys: &[],
     argument: ArgType::String,
     returns: ReturnType::Null,
 }];
@@ -115,7 +117,7 @@ pub const SHARE_METHODS: &[FrozenMethod] = &[FrozenMethod {
 /// `{response: cancel|exit}` (`services/binding.dart:523-528`).
 pub const EXIT_METHODS: &[FrozenMethod] = &[FrozenMethod {
     name: platform_methods::SYSTEM_EXIT_APPLICATION,
-    argument_key: Some("type"),
+    argument_keys: &["type", "exitCode"],
     argument: ArgType::Map,
     returns: ReturnType::Map,
 }];
@@ -176,15 +178,16 @@ pub fn validate_arguments(method: &FrozenMethod, arguments: &Value) -> Result<()
             let Value::Map(entries) = arguments else {
                 return Err("frozen method takes a map");
             };
-            let Some(key) = method.argument_key else {
-                return Err("frozen method map has no key");
-            };
-            let probe = Value::String(key.to_owned());
-            if entries.contains_key(&probe) {
-                Ok(())
-            } else {
-                Err("frozen method map is missing its key")
+            if method.argument_keys.is_empty() {
+                return Err("frozen method map has no keys");
             }
+            for key in method.argument_keys {
+                let probe = Value::String((*key).to_owned());
+                if !entries.contains_key(&probe) {
+                    return Err("frozen method map is missing a required key");
+                }
+            }
+            Ok(())
         }
     }
 }
@@ -225,7 +228,7 @@ mod tests {
         let method = &entry.methods[0];
         assert_eq!(method.name, "Share.invoke");
         assert_eq!(method.argument, ArgType::String);
-        assert_eq!(method.argument_key, None);
+        assert!(method.argument_keys.is_empty());
         assert_eq!(method.returns, ReturnType::Null);
 
         // The official call passes the selected text directly.
@@ -244,7 +247,7 @@ mod tests {
         let method = &entry.methods[0];
         assert_eq!(method.name, "System.exitApplication");
         assert_eq!(method.argument, ArgType::Map);
-        assert_eq!(method.argument_key, Some("type"));
+        assert_eq!(method.argument_keys, &["type", "exitCode"]);
         assert_eq!(method.returns, ReturnType::Map);
 
         let valid = Value::Map(BTreeMap::from([
@@ -255,12 +258,24 @@ mod tests {
             (Value::String("exitCode".to_owned()), Value::I32(0)),
         ]));
         assert_eq!(validate_arguments(method, &valid), Ok(()));
-        // The map is missing its documented key.
-        let missing = Value::Map(BTreeMap::from([(
+        // Flutter writes both keys (`binding.dart:525-528`): dropping either
+        // one is a malformed call, not a partial success.
+        let missing_type = Value::Map(BTreeMap::from([(
             Value::String("exitCode".to_owned()),
             Value::I32(0),
         )]));
-        assert!(validate_arguments(method, &missing).is_err());
+        let missing_exit_code = Value::Map(BTreeMap::from([(
+            Value::String("type".to_owned()),
+            Value::String("required".to_owned()),
+        )]));
+        assert_eq!(
+            validate_arguments(method, &missing_type),
+            Err("frozen method map is missing a required key")
+        );
+        assert_eq!(
+            validate_arguments(method, &missing_exit_code),
+            Err("frozen method map is missing a required key")
+        );
         assert!(validate_arguments(method, &Value::Null).is_err());
     }
 
