@@ -532,12 +532,7 @@ pub fn resolve_registration(
 
     let mut by_name: BTreeMap<&str, &PluginManifest> = BTreeMap::new();
     for manifest in &selected {
-        if manifest.name.is_empty()
-            || !manifest
-                .name
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        {
+        if !is_valid_package_name(&manifest.name) {
             return Err(RegistryError::InvalidName(manifest.name.clone()));
         }
         if by_name.insert(&manifest.name, manifest).is_some() {
@@ -807,13 +802,13 @@ mod tests {
     #[test]
     fn platform_filtering_matches_the_generated_registrant() {
         let manifests = vec![
-            PluginManifest::new("android-only", "1.0.0").on_platform("android"),
+            PluginManifest::new("android_only", "1.0.0").on_platform("android"),
             PluginManifest::new("all", "1.0.0"),
         ];
         let plan = resolve_registration(&manifests, Some("ios")).unwrap();
         assert_eq!(plan.names(), vec!["all"]);
         let plan = resolve_registration(&manifests, Some("android")).unwrap();
-        assert_eq!(plan.names(), vec!["all", "android-only"]);
+        assert_eq!(plan.names(), vec!["all", "android_only"]);
     }
 
     #[test]

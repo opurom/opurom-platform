@@ -492,11 +492,24 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 生成器同步补齐一个缺口：`network` 能力没有本地派发方法，原报告里没有它的行，dry-run 会把它误判为「不存在」。现在 PSV 为这类「有 GAP 原因但方法表为空」的能力追加一条 methodless marker 行（74 行报告），保证宿主生成器不会静默跳过已知 GAP。无渲染、IR、解释器改动，默认态零漂移。
 
+### 第四十四轮：深度轮次 — 注册计划与 dry-run 清单对齐
+
+新增 `tests/registration_plan_dry_run.rs`（5 项）：以 PSV 报告为唯一清单来源，为 Android/macOS/Windows 生成 `PluginManifest` 与冻结 `RegistrationPlan`，断言每个 plan 步骤来自报告、依赖顺序稳定可重放、注入失败被隔离且计划不变、4 条 GAP 能力永不进入注册计划。
+
+| Flutter 源码（3.50-candidate） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `flutter_plugins.dart:225-231` — `sortByDependencies`：依赖先于被依赖者，无依赖者按名字稳定排序 | `resolve_registration` 的线性依赖链 | 三平台 plan 重复 10 次完全一致，无 cycle break |
+| `flutter_plugins.dart:366-386` — 每个 platform key 生成一份清单 | 三平台独立 manifest 集合 | Android 5 项、macOS 2 项、Windows 2 项，与实际插件平台声明一致 |
+| `flutter_plugins.dart:478-503` — 只有声明 native build 的插件才生成注册项 | dry-run 只取报告中有本地源码的能力 | camera 不进入 macOS；video_player 不进入 Windows；GAP 能力全平台缺席 |
+| `flutter_plugins.dart:528-551` — 逐插件 try/catch 失败隔离 | `execute_plan` 注入失败 | 失败步骤被记录、其余步骤继续注册、plan.names() 不变 |
+
+同时修正 `resolve_registration` 的名称校验：此前它接受含连字符的名字（如 `android-only`），与 Pub/Dart 包名规则冲突；现在统一使用已有的 `is_valid_package_name`（`create_base.dart:731,811-813`），既有测试改用合法下划线名。无渲染、IR、解释器改动，默认态零漂移。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 四十三轮本地全量通过；合计 156 个库单测 + 44 个集成测试组、共 459 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
-- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）、`tests/channel_codec_contract.rs`（10）、`tests/capability_channel_alignment.rs`（5）、`tests/declared_channel_disposition.rs`（7）、`tests/gap_register_contract.rs`（8）、`tests/frozen_contract_crosscheck.rs`（8）、`tests/frozen_contract_failure_paths.rs`（7）、`tests/capability_dispatch_failure_contract.rs`（6）、`tests/capability_contract_report.rs`（5）、`tests/host_injection_generator_dry_run.rs`（5）；新增模块内单测 29 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
+- 结果：2026-11-19 四十四轮本地全量通过；合计 156 个库单测 + 45 个集成测试组、共 464 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
+- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）、`tests/channel_codec_contract.rs`（10）、`tests/capability_channel_alignment.rs`（5）、`tests/declared_channel_disposition.rs`（7）、`tests/gap_register_contract.rs`（8）、`tests/frozen_contract_crosscheck.rs`（8）、`tests/frozen_contract_failure_paths.rs`（7）、`tests/capability_dispatch_failure_contract.rs`（6）、`tests/capability_contract_report.rs`（5）、`tests/host_injection_generator_dry_run.rs`（5）、`tests/registration_plan_dry_run.rs`（5）；新增模块内单测 29 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）
 
