@@ -126,10 +126,19 @@ macOS 通知映射（`objc2-app-kit` 0.3.2 静态通知名）：
 
 执行端不引入运行时插件对象树：宿主只提供 `RegistrationFn` 函数指针表，执行结果是不可变 `RegistrationReport`，IR 与渲染管线未触碰。
 
+### 第八轮：原生视图嵌入桥接（P2 第一项）
+
+| Flutter 源码（3.50-candidate） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `services/system_channels.dart:423,430` — `flutter/platform_views` / `_2` 通道 | `platform_view_bridge` 复用既有通道名语义 | 9 个方法名常量 |
+| `services/platform_views.dart:286,325,936,989,1037,1406,1442,1472,1481,1517,1617,1627` — create/touch/resize/dispose 等操作 | 九方法 facade 接入 `PlatformViewRegistry` | 2 项单测：完整生命周期、畸形参数拒绝 |
+
+实现严守 `PlatformViewRegistry` 的单向生命周期（created→attached→resized→input-forwarded→disposed）：create 自动推进到 attached，首次 touch 前补 resize，输入后 resize 为幂等 size ack，dispose 可查询但不再接收输入。无运行时视图对象树，未触碰 IR。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 七轮全量通过；第七轮新增注册执行端 3 项单测，合计 103 个库单测 + 23 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0）。
+- 结果：2026-11-18 八轮全量通过；第八轮新增原生视图桥接 2 项单测，合计 105 个库单测 + 23 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0）。
 - 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）；新增模块内单测 10 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）

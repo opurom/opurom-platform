@@ -827,3 +827,5 @@ pub mod event_producers;
 pub mod plugin_registry;
 // Frozen registration plan executor with isolated failures.
 pub mod plugin_executor;
+// Platform-view method-channel bridge.
+pub mod platform_view_bridge;
