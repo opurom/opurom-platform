@@ -194,10 +194,14 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 新增 `tests/bridge_fuzz_matrix.rs`（3 项）：标准编解码在 0..=8 长度 × 11 个边界字节的有限矩阵上无 panic；JSON 编解码在 19 个畸形/边界文本上无 panic；14 类能力的 missing-handler reply 始终是 typed `unimplemented` 且永不伪造 `Success(Null)`。该矩阵是确定性、可重放的单元测试，不引入随机源，符合引擎确定性红线。源码依据：message_codecs.dart:88-200,310-562；platform_channel.dart:350-366。默认态零漂移。
 
+### 第十八轮：深度轮次 — 标准与 JSON codec 跨端一致性
+
+`bridge_fuzz_matrix` 新增 `standard_and_json_paths_agree_on_logical_values`：对 Null/bool/I32/I64/F64/String/List/Map 等共享 JSON 表示的值，验证 StandardMessageCodec 与 JSONMessageCodec 编解码往返逻辑一致；按 Dart 单一 `int` 类型（`message_codecs.dart:97,391-397`）将可落入 I32 的 I64 归一化后比较，避免把合法表示差异误判为跨端漂移。默认态零漂移，无 IR/渲染改动。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 十七轮本地全量通过；第十七轮新增确定性 fuzz 矩阵 3 项，合计 123 个库单测 + 25 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
+- 结果：2026-11-18 十八轮本地全量通过；第十八轮新增双 codec 一致性 1 项，合计 123 个库单测 + 25 个集成测试组全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
 - 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）；新增模块内单测 10 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）

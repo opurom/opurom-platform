@@ -63,6 +63,68 @@ fn json_codec_never_panics_on_bounded_text_matrix() {
 }
 
 #[test]
+fn standard_and_json_paths_agree_on_logical_values() {
+    use opurom_platform::framework_channels::{decode_json_message, encode_json_message};
+    use opurom_platform::platform_channel::{decode_message, encode_message};
+    use std::collections::BTreeMap;
+
+    // Flutter's two codecs have different byte layouts but must preserve the
+    // same logical values (`message_codecs.dart:88-200,263-562`). JSON has a
+    // single Dart `int` type, so an i64 that fits i32 is read back as I32;
+    // normalize that representational difference before comparing.
+    let values = [
+        Value::Null,
+        Value::Bool(true),
+        Value::Bool(false),
+        Value::I32(i32::MIN),
+        Value::I32(i32::MAX),
+        Value::I64(i64::MIN),
+        Value::I64(i64::MAX),
+        Value::F64(0.5),
+        Value::String("hello".to_owned()),
+        Value::String("escaped\nquote\"".to_owned()),
+        Value::List(vec![
+            Value::Null,
+            Value::Bool(true),
+            Value::I32(7),
+            Value::I64(9),
+            Value::F64(1.25),
+            Value::String("x".to_owned()),
+        ]),
+        Value::Map(BTreeMap::from([
+            (Value::String("a".to_owned()), Value::I32(1)),
+            (Value::String("b".to_owned()), Value::Bool(false)),
+            (Value::String("c".to_owned()), Value::Null),
+        ])),
+    ];
+    for value in values {
+        let standard = encode_message(&value).unwrap();
+        assert_eq!(decode_message(standard.as_deref()).unwrap(), value);
+        let json = encode_json_message(&value).unwrap();
+        assert_eq!(
+            normalize_json_ints(&decode_json_message(&json).unwrap()),
+            normalize_json_ints(&value)
+        );
+    }
+}
+
+/// Fold I64 values inside the I32 range into I32, matching Dart's single
+/// `int` type after `json.decoder` (`message_codecs.dart:97,391-397`).
+fn normalize_json_ints(value: &Value) -> Value {
+    match value {
+        Value::I64(n) if i32::try_from(*n).is_ok() => Value::I32(*n as i32),
+        Value::List(items) => Value::List(items.iter().map(normalize_json_ints).collect()),
+        Value::Map(entries) => Value::Map(
+            entries
+                .iter()
+                .map(|(k, v)| (k.clone(), normalize_json_ints(v)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+#[test]
 fn every_capability_method_has_a_typed_missing_handler_reply() {
     let rows = audit_all();
     assert_eq!(rows.len(), ALL_CAPABILITIES.len());
