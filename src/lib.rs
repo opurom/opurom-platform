@@ -825,6 +825,8 @@ pub mod system_events;
 pub mod event_producers;
 // Framework channel payload to event bridge.
 pub mod channel_event_bridge;
+// Compile-time host capability injection audit.
+pub mod host_injection_audit;
 // Deterministic plugin registration contract.
 pub mod plugin_registry;
 // Frozen registration plan executor with isolated failures.
