@@ -45,9 +45,16 @@
 //! - `packages/flutter/lib/src/services/message_codecs.dart:263-324,580-596`
 //!   — the standard message and method codecs.
 //!
+//! The table also carries the complete official framework channel
+//! inventory, so a channel the bridge does not serve yet is declared with
+//! its official kind and codec instead of being silently absent. Only the
+//! channels marked [`Coverage::Bridged`] are routed; the rest are
+//! [`Coverage::Declared`] and are rejected by the encoders with a typed
+//! error.
+//!
 //! There is no runtime registry: the contract is a `const` slice and a lookup
-//! is a scan over a closed five-entry list. Nothing here touches the IR, the
-//! renderer or the interpreter.
+//! is a scan over a closed twenty-four-entry list. Nothing here touches the
+//! IR, the renderer or the interpreter.
 
 use crate::framework_channels::{
     decode_json_envelope, decode_json_message, decode_json_method_call, encode_json_envelope,
@@ -82,7 +89,16 @@ impl ChannelCodec {
     }
 }
 
-/// The official declaration of one bridged Flutter channel.
+/// Whether the bridge routes payloads for a channel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Coverage {
+    /// The channel is bridged: the encoders and decoders route it.
+    Bridged,
+    /// The channel belongs to the official namespace but has no bridge route.
+    Declared,
+}
+
+/// The official declaration of one Flutter channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChannelContract {
     /// The channel name as Flutter declares it.
@@ -95,55 +111,236 @@ pub struct ChannelContract {
     pub optional: bool,
     /// The codec the channel carries.
     pub codec: ChannelCodec,
+    /// Whether the bridge routes this channel.
+    pub coverage: Coverage,
+    /// The Flutter source line the declaration was read from.
+    pub pin: &'static str,
 }
 
-/// The bridged framework channels, in Flutter's declaration order.
-pub const BRIDGED_CHANNELS: &[ChannelContract] = &[
-    // `services/system_channels.dart:385-388`
+/// The complete official framework channel inventory.
+///
+/// Every entry is read from `packages/flutter/lib/src/services/
+/// system_channels.dart`; the pin records the declaration line. The
+/// bridged entries are the ones the encoders route.
+pub const FRAMEWORK_CHANNELS: &[ChannelContract] = &[
     ChannelContract {
-        name: system_channels::LIFECYCLE,
-        kind: ChannelKind::BasicMessage,
-        optional: false,
-        codec: ChannelCodec::String,
-    },
-    // `services/system_channels.dart:401-404`
-    ChannelContract {
-        name: system_channels::SYSTEM,
-        kind: ChannelKind::BasicMessage,
-        optional: false,
+        name: system_channels::NAVIGATION,
+        kind: ChannelKind::Method { optional: true },
+        optional: true,
         codec: ChannelCodec::Json,
+        coverage: Coverage::Declared,
+        pin: "system_channels.dart:76-79",
     },
-    // `services/system_channels.dart:181-184`
+    ChannelContract {
+        name: system_channels::BACK_GESTURE,
+        kind: ChannelKind::Method { optional: true },
+        optional: true,
+        codec: ChannelCodec::Standard,
+        coverage: Coverage::Declared,
+        pin: "system_channels.dart:98",
+    },
     ChannelContract {
         name: system_channels::PLATFORM,
         kind: ChannelKind::Method { optional: true },
         optional: true,
         codec: ChannelCodec::Json,
+        coverage: Coverage::Bridged,
+        pin: "system_channels.dart:181-184",
     },
-    // `services/system_channels.dart:423`
+    ChannelContract {
+        name: system_channels::STATUS_BAR,
+        kind: ChannelKind::Method { optional: true },
+        optional: true,
+        codec: ChannelCodec::Json,
+        coverage: Coverage::Declared,
+        pin: "system_channels.dart:201-204",
+    },
+    ChannelContract {
+        name: system_channels::PROCESS_TEXT,
+        kind: ChannelKind::Method { optional: true },
+        optional: true,
+        codec: ChannelCodec::Standard,
+        coverage: Coverage::Declared,
+        pin: "system_channels.dart:210",
+    },
+    ChannelContract {
+        name: system_channels::TEXT_INPUT,
+        kind: ChannelKind::Method { optional: true },
+        optional: true,
+        codec: ChannelCodec::Json,
+        coverage: Coverage::Declared,
+        pin: "system_channels.dart:293-296",
+    },
+    ChannelContract {
+        name: system_channels::SCRIBE,
+        kind: ChannelKind::Method { optional: true },
+        optional: true,
+        codec: ChannelCodec::Json,
+        coverage: Coverage::Declared,
+        pin: "system_channels.dart:322",
+    },
+    ChannelContract {
+        name: system_channels::SPELL_CHECK,
+        kind: ChannelKind::Method { optional: true },
+        optional: true,
+        codec: ChannelCodec::Standard,
+        coverage: Coverage::Declared,
+        pin: "system_channels.dart:342",
+    },
+    ChannelContract {
+        name: system_channels::UNDO_MANAGER,
+        kind: ChannelKind::Method { optional: true },
+        optional: true,
+        codec: ChannelCodec::Json,
+        coverage: Coverage::Declared,
+        pin: "system_channels.dart:345-348",
+    },
+    ChannelContract {
+        name: system_channels::KEY_EVENT,
+        kind: ChannelKind::BasicMessage,
+        optional: false,
+        codec: ChannelCodec::Json,
+        coverage: Coverage::Declared,
+        pin: "system_channels.dart:370-373",
+    },
+    ChannelContract {
+        name: system_channels::LIFECYCLE,
+        kind: ChannelKind::BasicMessage,
+        optional: false,
+        codec: ChannelCodec::String,
+        coverage: Coverage::Bridged,
+        pin: "system_channels.dart:385-388",
+    },
+    ChannelContract {
+        name: system_channels::SYSTEM,
+        kind: ChannelKind::BasicMessage,
+        optional: false,
+        codec: ChannelCodec::Json,
+        coverage: Coverage::Bridged,
+        pin: "system_channels.dart:401-404",
+    },
+    ChannelContract {
+        name: system_channels::ACCESSIBILITY,
+        kind: ChannelKind::BasicMessage,
+        optional: false,
+        codec: ChannelCodec::Standard,
+        coverage: Coverage::Declared,
+        pin: "system_channels.dart:413-416",
+    },
     ChannelContract {
         name: system_channels::PLATFORM_VIEWS,
         kind: ChannelKind::Method { optional: false },
         optional: false,
         codec: ChannelCodec::Standard,
+        coverage: Coverage::Bridged,
+        pin: "system_channels.dart:423",
     },
-    // `services/system_channels.dart:430`
     ChannelContract {
         name: system_channels::PLATFORM_VIEWS_2,
         kind: ChannelKind::Method { optional: false },
         optional: false,
         codec: ChannelCodec::Standard,
+        coverage: Coverage::Bridged,
+        pin: "system_channels.dart:430",
+    },
+    ChannelContract {
+        name: system_channels::SKIA,
+        kind: ChannelKind::Method { optional: false },
+        optional: false,
+        codec: ChannelCodec::Json,
+        coverage: Coverage::Declared,
+        pin: "system_channels.dart:439",
+    },
+    ChannelContract {
+        name: system_channels::MOUSE_CURSOR,
+        kind: ChannelKind::Method { optional: true },
+        optional: true,
+        codec: ChannelCodec::Standard,
+        coverage: Coverage::Declared,
+        pin: "system_channels.dart:450",
+    },
+    ChannelContract {
+        name: system_channels::RESTORATION,
+        kind: ChannelKind::Method { optional: true },
+        optional: true,
+        codec: ChannelCodec::Standard,
+        coverage: Coverage::Declared,
+        pin: "system_channels.dart:478",
+    },
+    ChannelContract {
+        name: system_channels::DEFERRED_COMPONENT,
+        kind: ChannelKind::Method { optional: true },
+        optional: true,
+        codec: ChannelCodec::Standard,
+        coverage: Coverage::Declared,
+        pin: "system_channels.dart:501",
+    },
+    ChannelContract {
+        name: system_channels::LOCALIZATION,
+        kind: ChannelKind::Method { optional: true },
+        optional: true,
+        codec: ChannelCodec::Json,
+        coverage: Coverage::Declared,
+        pin: "system_channels.dart:514-517",
+    },
+    ChannelContract {
+        name: system_channels::MENU,
+        kind: ChannelKind::Method { optional: true },
+        optional: true,
+        codec: ChannelCodec::Standard,
+        coverage: Coverage::Declared,
+        pin: "system_channels.dart:566",
+    },
+    ChannelContract {
+        name: system_channels::CONTEXT_MENU,
+        kind: ChannelKind::Method { optional: true },
+        optional: true,
+        codec: ChannelCodec::Json,
+        coverage: Coverage::Declared,
+        pin: "system_channels.dart:576-579",
+    },
+    ChannelContract {
+        name: system_channels::KEYBOARD,
+        kind: ChannelKind::Method { optional: true },
+        optional: true,
+        codec: ChannelCodec::Standard,
+        coverage: Coverage::Declared,
+        pin: "system_channels.dart:599",
+    },
+    ChannelContract {
+        name: system_channels::SENSITIVE_CONTENT,
+        kind: ChannelKind::Method { optional: true },
+        optional: true,
+        codec: ChannelCodec::Standard,
+        coverage: Coverage::Declared,
+        pin: "system_channels.dart:616",
     },
 ];
 
-/// Look up the contract of one bridged channel.
+/// The channels the bridge routes.
+pub fn bridged_channels() -> impl Iterator<Item = &'static ChannelContract> {
+    FRAMEWORK_CHANNELS
+        .iter()
+        .filter(|entry| entry.coverage == Coverage::Bridged)
+}
+/// Look up the official declaration of one framework channel, whether or not
+/// the bridge routes it.
 pub fn contract(name: &str) -> Option<&'static ChannelContract> {
-    BRIDGED_CHANNELS.iter().find(|entry| entry.name == name)
+    FRAMEWORK_CHANNELS.iter().find(|entry| entry.name == name)
+}
+
+/// The declaration of a channel the bridge routes.
+fn bridged(name: &str) -> Result<&'static ChannelContract, CodecError> {
+    let entry = contract(name).ok_or(CodecError::Unsupported("unknown framework channel"))?;
+    if entry.coverage != Coverage::Bridged {
+        return Err(CodecError::Unsupported("channel has no bridge route"));
+    }
+    Ok(entry)
 }
 
 /// The contract of a basic message channel.
 fn require_basic_message(name: &str) -> Result<&'static ChannelContract, CodecError> {
-    let entry = contract(name).ok_or(CodecError::Unsupported("unknown framework channel"))?;
+    let entry = bridged(name)?;
     if entry.kind != ChannelKind::BasicMessage {
         return Err(CodecError::Unsupported(
             "channel is not a basic message channel",
@@ -154,7 +351,7 @@ fn require_basic_message(name: &str) -> Result<&'static ChannelContract, CodecEr
 
 /// The contract of a method channel.
 fn require_method(name: &str) -> Result<&'static ChannelContract, CodecError> {
-    let entry = contract(name).ok_or(CodecError::Unsupported("unknown framework channel"))?;
+    let entry = bridged(name)?;
     if !matches!(entry.kind, ChannelKind::Method { .. }) {
         return Err(CodecError::Unsupported("channel is not a method channel"));
     }
@@ -268,8 +465,8 @@ mod tests {
 
     #[test]
     fn contract_table_matches_flutter_declarations() {
-        assert_eq!(BRIDGED_CHANNELS.len(), 5);
-        let mut names: Vec<&str> = BRIDGED_CHANNELS.iter().map(|entry| entry.name).collect();
+        assert_eq!(FRAMEWORK_CHANNELS.len(), 24);
+        let mut names: Vec<&str> = FRAMEWORK_CHANNELS.iter().map(|entry| entry.name).collect();
         let sorted = {
             let mut copy = names.clone();
             copy.sort();
@@ -278,7 +475,19 @@ mod tests {
         };
         assert_eq!(sorted.len(), names.len(), "channel names must be unique");
         names.dedup();
-        assert_eq!(names.len(), 5);
+        assert_eq!(names.len(), 24);
+
+        let bridged: Vec<&str> = bridged_channels().map(|entry| entry.name).collect();
+        assert_eq!(
+            bridged,
+            vec![
+                system_channels::PLATFORM,
+                system_channels::LIFECYCLE,
+                system_channels::SYSTEM,
+                system_channels::PLATFORM_VIEWS,
+                system_channels::PLATFORM_VIEWS_2,
+            ]
+        );
 
         let lifecycle = contract(system_channels::LIFECYCLE).expect("lifecycle channel");
         assert_eq!(lifecycle.codec, ChannelCodec::String);

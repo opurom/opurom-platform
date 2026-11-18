@@ -37,14 +37,15 @@
 use std::collections::BTreeSet;
 
 use opurom_platform::channel_contract::{
-    contract, decode_channel_envelope, decode_channel_message, decode_channel_method_call,
-    encode_channel_envelope, encode_channel_message, encode_channel_method_call, ChannelCodec,
-    BRIDGED_CHANNELS,
+    bridged_channels, contract, decode_channel_envelope, decode_channel_message,
+    decode_channel_method_call, encode_channel_envelope, encode_channel_message,
+    encode_channel_method_call, ChannelCodec, Coverage, FRAMEWORK_CHANNELS,
 };
 use opurom_platform::channel_event_bridge::{decode_lifecycle_message, decode_system_message};
 use opurom_platform::framework_channels::parse_lifecycle_message;
 use opurom_platform::platform_channel::{
-    decode_message, encode_message, error_codes, system_channels, MethodCall, Reply, Value,
+    decode_message, encode_message, error_codes, system_channels, CodecError, MethodCall, Reply,
+    Value,
 };
 
 /// The declaration of one channel, as read from `system_channels.dart`.
@@ -96,7 +97,9 @@ const DECLARED: &[Declared] = &[
 
 #[test]
 fn contract_table_matches_the_flutter_declarations() {
-    assert_eq!(BRIDGED_CHANNELS.len(), DECLARED.len());
+    let bridged: Vec<&'static opurom_platform::channel_contract::ChannelContract> =
+        bridged_channels().collect();
+    assert_eq!(bridged.len(), DECLARED.len());
     for declared in DECLARED {
         let entry = contract(declared.name)
             .unwrap_or_else(|| panic!("{} is not in the contract table", declared.name));
@@ -133,16 +136,229 @@ fn contract_table_matches_the_flutter_declarations() {
     }
 }
 
+/// The official framework channel inventory, read independently from
+/// `packages/flutter/lib/src/services/system_channels.dart`.
+///
+/// Each row is `(name, kind, optional, codec, bridged)`.
+const INVENTORY: &[(&str, &str, bool, ChannelCodec, bool)] = &[
+    (
+        "flutter/navigation",
+        "method",
+        true,
+        ChannelCodec::Json,
+        false,
+    ),
+    (
+        "flutter/backgesture",
+        "method",
+        true,
+        ChannelCodec::Standard,
+        false,
+    ),
+    ("flutter/platform", "method", true, ChannelCodec::Json, true),
+    (
+        "flutter/status_bar",
+        "method",
+        true,
+        ChannelCodec::Json,
+        false,
+    ),
+    (
+        "flutter/processtext",
+        "method",
+        true,
+        ChannelCodec::Standard,
+        false,
+    ),
+    (
+        "flutter/textinput",
+        "method",
+        true,
+        ChannelCodec::Json,
+        false,
+    ),
+    ("flutter/scribe", "method", true, ChannelCodec::Json, false),
+    (
+        "flutter/spellcheck",
+        "method",
+        true,
+        ChannelCodec::Standard,
+        false,
+    ),
+    (
+        "flutter/undomanager",
+        "method",
+        true,
+        ChannelCodec::Json,
+        false,
+    ),
+    (
+        "flutter/keyevent",
+        "message",
+        false,
+        ChannelCodec::Json,
+        false,
+    ),
+    (
+        "flutter/lifecycle",
+        "message",
+        false,
+        ChannelCodec::String,
+        true,
+    ),
+    ("flutter/system", "message", false, ChannelCodec::Json, true),
+    (
+        "flutter/accessibility",
+        "message",
+        false,
+        ChannelCodec::Standard,
+        false,
+    ),
+    (
+        "flutter/platform_views",
+        "method",
+        false,
+        ChannelCodec::Standard,
+        true,
+    ),
+    (
+        "flutter/platform_views_2",
+        "method",
+        false,
+        ChannelCodec::Standard,
+        true,
+    ),
+    ("flutter/skia", "method", false, ChannelCodec::Json, false),
+    (
+        "flutter/mousecursor",
+        "method",
+        true,
+        ChannelCodec::Standard,
+        false,
+    ),
+    (
+        "flutter/restoration",
+        "method",
+        true,
+        ChannelCodec::Standard,
+        false,
+    ),
+    (
+        "flutter/deferredcomponent",
+        "method",
+        true,
+        ChannelCodec::Standard,
+        false,
+    ),
+    (
+        "flutter/localization",
+        "method",
+        true,
+        ChannelCodec::Json,
+        false,
+    ),
+    (
+        "flutter/menu",
+        "method",
+        true,
+        ChannelCodec::Standard,
+        false,
+    ),
+    (
+        "flutter/contextmenu",
+        "method",
+        true,
+        ChannelCodec::Json,
+        false,
+    ),
+    (
+        "flutter/keyboard",
+        "method",
+        true,
+        ChannelCodec::Standard,
+        false,
+    ),
+    (
+        "flutter/sensitivecontent",
+        "method",
+        true,
+        ChannelCodec::Standard,
+        false,
+    ),
+];
+
+#[test]
+fn the_inventory_covers_every_official_framework_channel() {
+    assert_eq!(FRAMEWORK_CHANNELS.len(), INVENTORY.len());
+    for (name, kind, optional, codec, bridged) in INVENTORY {
+        let entry = contract(name)
+            .unwrap_or_else(|| panic!("{name} is missing from the channel inventory"));
+        assert_eq!(entry.codec, *codec, "{name} codec drifted");
+        assert_eq!(entry.optional, *optional, "{name} optional flag drifted");
+        assert_eq!(
+            entry.coverage,
+            if *bridged {
+                Coverage::Bridged
+            } else {
+                Coverage::Declared
+            },
+            "{name} coverage drifted"
+        );
+        match *kind {
+            "message" => assert_eq!(
+                entry.kind,
+                opurom_platform::platform_channel::ChannelKind::BasicMessage,
+                "{name} kind drifted"
+            ),
+            "method" => assert!(
+                matches!(
+                    entry.kind,
+                    opurom_platform::platform_channel::ChannelKind::Method { .. }
+                ),
+                "{name} kind drifted"
+            ),
+            other => panic!("unknown kind {other}"),
+        }
+    }
+}
+
+#[test]
+fn a_declared_only_channel_has_no_bridge_route() {
+    for (name, _kind, _optional, _codec, bridged) in INVENTORY {
+        if *bridged {
+            continue;
+        }
+        assert_eq!(
+            encode_channel_message(name, &Value::Null),
+            Err(CodecError::Unsupported("channel has no bridge route")),
+            "{name} must not be routable"
+        );
+        assert_eq!(
+            encode_channel_method_call(
+                name,
+                &MethodCall {
+                    method: "x".to_owned(),
+                    arguments: Value::Null,
+                }
+            ),
+            Err(CodecError::Unsupported("channel has no bridge route")),
+            "{name} must not be routable"
+        );
+    }
+}
+
 #[test]
 fn contract_names_are_unique_and_use_the_official_namespaces() {
-    let names: BTreeSet<&str> = BRIDGED_CHANNELS.iter().map(|entry| entry.name).collect();
-    assert_eq!(names.len(), BRIDGED_CHANNELS.len());
-    for entry in BRIDGED_CHANNELS {
+    let names: BTreeSet<&str> = FRAMEWORK_CHANNELS.iter().map(|entry| entry.name).collect();
+    assert_eq!(names.len(), FRAMEWORK_CHANNELS.len());
+    assert_eq!(names.len(), 24);
+    for entry in FRAMEWORK_CHANNELS {
         assert!(
             entry.name.starts_with("flutter/"),
             "{} is outside the framework namespace",
             entry.name
         );
+        assert!(!entry.pin.is_empty(), "{} has no source pin", entry.name);
     }
     // The frozen names are the ones the crate already publishes.
     assert!(names.contains(system_channels::LIFECYCLE));

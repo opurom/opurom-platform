@@ -67,6 +67,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
 
+use opurom_platform::channel_contract;
 use opurom_platform::framework_channels::lifecycle_message;
 use opurom_platform::media_capabilities::camera_methods;
 use opurom_platform::platform_channel::{
@@ -1058,6 +1059,19 @@ fn channel_namespace_coverage_is_explicit() {
     for name in &bridged {
         assert!(official.contains(name), "{name} is not an official channel");
     }
+
+    // The implementation's channel inventory must agree with the pinned
+    // table above, name for name.
+    let inventory: Vec<&str> = channel_contract::FRAMEWORK_CHANNELS
+        .iter()
+        .map(|entry| entry.name)
+        .collect();
+    let mut sorted_inventory = inventory.clone();
+    sorted_inventory.sort();
+    assert_eq!(
+        sorted_inventory,
+        official.iter().copied().collect::<Vec<&str>>()
+    );
 
     let uncovered: Vec<&str> = official
         .iter()

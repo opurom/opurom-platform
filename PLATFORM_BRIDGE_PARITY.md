@@ -306,10 +306,25 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 第二十五轮审计的 `unused` 基线随之收敛：`flutter/lifecycle`、`flutter/platform`、`flutter/platform_views`、`flutter/platform_views_2` 四条通道名常量被契约表引用后不再是「已声明未接线」，`unused` 由 7 项降为 3 项。无渲染、IR、解释器改动，默认态零漂移。
 
+### 第二十七轮：深度轮次 — 官方框架通道全量清单
+
+新增 `src/platform_channel::system_channels` 的 19 条官方通道名常量，并把 `channel_contract` 的契约表扩成 Flutter 3.50 的完整框架通道清单（24 条），每条带通道类型、是否可选、codec、是否桥接与源码行号。清单里的每一条都逐字对照 `system_channels.dart` 的声明读取，不自创任何通道名。
+
+| Flutter 源码（3.50-candidate） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `services/system_channels.dart:76-79` — `flutter/navigation`，`OptionalMethodChannel` + `JSONMethodCodec` | 清单条目，标记 `Coverage::Declared` | 编解码路由返回 typed `Unsupported("channel has no bridge route")` |
+| `services/system_channels.dart:98,210,342,450,478,501,566,599,616` — `flutter/backgesture`/`processtext`/`spellcheck`/`mousecursor`/`restoration`/`deferredcomponent`/`menu`/`keyboard`/`sensitivecontent`，`OptionalMethodChannel` 默认 `StandardMethodCodec` | 同上 | 同上 |
+| `services/system_channels.dart:201-204,293-296,322,345-348,514-517,576-579` — `flutter/status_bar`/`textinput`/`scribe`/`undomanager`/`localization`/`contextmenu`，`OptionalMethodChannel` + `JSONMethodCodec` | 同上 | 同上 |
+| `services/system_channels.dart:370-373,413-416` — `flutter/keyevent` 与 `flutter/accessibility` 是 `BasicMessageChannel`，分别用 `JSONMessageCodec` 与 `StandardMessageCodec` | 同上 | 同上 |
+| `services/system_channels.dart:439` — `flutter/skia` 是严格 `MethodChannel` + `JSONMethodCodec` | 同上 | 同上 |
+| `services/platform_channel.dart:291-299` — `MethodChannel` 的默认 codec 是 `StandardMethodCodec` | 清单中未显式传 codec 的条目一律记为 `ChannelCodec::Standard` | 清单的 codec 列与 Flutter 构造实参逐条一致 |
+
+清单与第二十五轮的审计表互为独立来源：`tests/event_code_dictionary_audit.rs` 用自己固定的官方表逐名比对实现的 24 条清单，任何一条名称漂移都会让两边对不上。已桥接 5 条、未桥接 19 条，未桥接条目在编解码入口被 typed 拒绝，不会被误当成可用通道。无渲染、IR、解释器改动，默认态零漂移。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 二十六轮本地全量通过；合计 140 个库单测 + 33 个集成测试组、共 388 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
+- 结果：2026-11-18 二十七轮本地全量通过；合计 140 个库单测 + 33 个集成测试组、共 390 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
 - 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）、`tests/channel_codec_contract.rs`（10）；新增模块内单测 17 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）

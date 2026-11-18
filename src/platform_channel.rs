@@ -845,6 +845,44 @@ pub mod system_channels {
     pub const PLATFORM: &str = "flutter/platform";
     pub const PLATFORM_VIEWS: &str = "flutter/platform_views";
     pub const PLATFORM_VIEWS_2: &str = "flutter/platform_views_2";
+    /// `services/system_channels.dart:76-79`.
+    pub const NAVIGATION: &str = "flutter/navigation";
+    /// `services/system_channels.dart:98`.
+    pub const BACK_GESTURE: &str = "flutter/backgesture";
+    /// `services/system_channels.dart:201-204`.
+    pub const STATUS_BAR: &str = "flutter/status_bar";
+    /// `services/system_channels.dart:210`.
+    pub const PROCESS_TEXT: &str = "flutter/processtext";
+    /// `services/system_channels.dart:293-296`.
+    pub const TEXT_INPUT: &str = "flutter/textinput";
+    /// `services/system_channels.dart:322`.
+    pub const SCRIBE: &str = "flutter/scribe";
+    /// `services/system_channels.dart:342`.
+    pub const SPELL_CHECK: &str = "flutter/spellcheck";
+    /// `services/system_channels.dart:345-348`.
+    pub const UNDO_MANAGER: &str = "flutter/undomanager";
+    /// `services/system_channels.dart:370-373`.
+    pub const KEY_EVENT: &str = "flutter/keyevent";
+    /// `services/system_channels.dart:413-416`.
+    pub const ACCESSIBILITY: &str = "flutter/accessibility";
+    /// `services/system_channels.dart:439`.
+    pub const SKIA: &str = "flutter/skia";
+    /// `services/system_channels.dart:450`.
+    pub const MOUSE_CURSOR: &str = "flutter/mousecursor";
+    /// `services/system_channels.dart:478`.
+    pub const RESTORATION: &str = "flutter/restoration";
+    /// `services/system_channels.dart:501`.
+    pub const DEFERRED_COMPONENT: &str = "flutter/deferredcomponent";
+    /// `services/system_channels.dart:514-517`.
+    pub const LOCALIZATION: &str = "flutter/localization";
+    /// `services/system_channels.dart:566`.
+    pub const MENU: &str = "flutter/menu";
+    /// `services/system_channels.dart:576-579`.
+    pub const CONTEXT_MENU: &str = "flutter/contextmenu";
+    /// `services/system_channels.dart:599`.
+    pub const KEYBOARD: &str = "flutter/keyboard";
+    /// `services/system_channels.dart:616`.
+    pub const SENSITIVE_CONTENT: &str = "flutter/sensitivecontent";
 }
 
 /// EventChannel listen/cancel method names (`platform_channel.dart:710,725`).
