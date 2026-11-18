@@ -333,7 +333,7 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 审计基线随之再收敛：`plugins.flutter.io/camera` 被插件清单引用后不再是「已声明未接线」，`unused` 由 3 项降为 2 项（只剩 Flutter 自身也从不写出的标签 5，以及只作类型级标签的 `missing_plugin`）。审计测试同时新增「实现插件清单 vs 审计固定插件表」逐名交叉核对 1 项。无渲染、IR、解释器改动，默认态零漂移。
 
-### 第二十五轮：深度轮次 — 平台视图按端 typed 契约
+### 第三十轮：深度轮次 — 平台视图按端 typed 契约
 
 `src/platform_view_bridge.rs` 把统一的 `view_methods` 表细化为按平台族注入的 typed 操作集：新增 `ViewPlatform::{Android,Darwin}`、`PlatformViewBridge::for_platform` / `platform()`；每次调用在进入 handler 前先做平台归属检查，不属于宿主平台族的操作返回 typed `unimplemented`，不再静默成功。
 
@@ -345,12 +345,29 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 | `:1406,1568,1627` — Android 的 `rejectGesture` 可带 `gestureId`，Darwin 只带 `id` | 统一参数校验 + 平台族方法表 | 既有 `gestureId` 整数测试与 Darwin `rejectGesture` 测试同时通过 |
 
 默认构造仍为 Android，保持既有调用方行为；无渲染、IR、解释器改动，默认态零漂移。
+### 第二十九轮：深度轮次 — 能力/插件通道/manifest 三方对齐
+
+新增 `tests/capability_channel_alignment.rs`（4 项）：把 `native_capabilities` 的 14 类能力、`channel_contract::PLUGIN_CHANNELS` 的插件通道清单、以及 `flutter_tools` 从 app-facing `pubspec.yaml` 生成的 `.flutter-plugins-dependencies` 三方对齐，输出机器可读差异报告（格式 `class|subject|detail|source`）。四类差异：`declared_no_source`（能力声称有插件但快照里没有）、`plugin_channel_missing`（快照有通道但 Opurom 无能力认领）、`gap_with_source`（GAP 能力伪造实现）、`duplicate_channel`。干净运行四类均为 0 行。
+
+| Flutter 源码（3.50-candidate） | Opurom 审计项 | 验证 |
+| --- | --- | --- |
+| `packages/flutter_tools/lib/src/flutter_plugins.dart:366-386` — 生成清单按 6 个平台键逐条展开 | 6 个 app-facing 插件的 `pubspec.yaml` 平台键冻结成表 | 每包至少一个平台键；本地快照存在时逐字比对实际 pubspec |
+| `flutter_plugins.dart:478-503` — 清单条目含 name/path/native_build/dependencies | 每个插件能力的包名与通道名来自固定对齐表 | 包存在且通道在 `PLUGIN_CHANNELS` 中，否则报 `declared_no_source` |
+| `flutter_plugins.dart:563-575,943-956` — 平台 registrant 从 method-channel 插件生成 | 每条插件通道必须被恰好一个能力认领 | owner count ≠ 1 报 `plugin_channel_missing` |
+| `flutter-plugins/packages/*/*/pubspec.yaml:13-25` — 6 个插件的平台键 | 冻结在测试内，CI 无需额外 clone | GitHub Actions 只 clone `opurom-examples`，审计仍可独立运行 |
+
+两处分类需要显式说明，否则会误报：
+
+- `Camera` 的 `plugins.flutter.io/camera/imageStream` 是逐实例 `EventChannel`，名字带运行时 texture id（`camera_platform_interface/.../method_channel_camera.dart:323-324`），没有可冻结的稳定 wire 名，从 owner/duplicate 检查中排除。
+- `VideoPlayer` 在快照里只有逐实例事件通道（`video_player_android/.../VideoPlayerPlugin.java:121-123`），没有稳定命令通道，记为 `PerInstanceEvent`；`DeviceInfo` 的本地 display/geometry 投影不是 `device_info_plus` parity，仍保持 typed GAP。
+
+审计器自检覆盖「缺包」与「错误 GAP 分类」两类探针；报告行全部以 `|` 分隔四字段，可直接被机器消费。首次远端 CI 发现 `flutter-plugins` 不在本仓 clone 列表内，现改为「有快照时交叉核对、无快照时用冻结表独立审计」，并新增 CI 缺快照路径的测试。无渲染、IR、解释器改动，默认态零漂移。
 
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 二十八轮本地全量通过；合计 140 个库单测 + 33 个集成测试组、共 391 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
-- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）、`tests/channel_codec_contract.rs`（10）；新增模块内单测 17 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
+- 结果：2026-11-18 三十轮本地全量通过；合计 141 个库单测 + 35 个集成测试组、共 397 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
+- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）、`tests/channel_codec_contract.rs`（10）、`tests/capability_channel_alignment.rs`（5）；新增模块内单测 18 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）
 
