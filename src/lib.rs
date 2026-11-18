@@ -813,6 +813,8 @@ pub fn desktop_support() -> Vec<DesktopSupport> {
 pub mod platform_channel;
 // Framework-level codecs, lifecycle wire and platform method names.
 pub mod framework_channels;
+// Per-channel codec contract for the bridged framework channels.
+pub mod channel_contract;
 // Unified high-frequency native capability contract.
 pub mod native_capabilities;
 // Host backends for preferences and path provider.

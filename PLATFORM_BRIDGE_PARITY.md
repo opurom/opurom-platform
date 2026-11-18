@@ -289,11 +289,28 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 
 审计器本身带自检：向字典注入重复值、非法值、缺失官方值与未被引用的码，四类结论都会被检出；跨命名空间重名单独归入 `cross` 命名空间。无渲染、IR、解释器改动，默认态零漂移。
 
+### 第二十六轮：深度轮次 — 官方通道 codec 契约落地
+
+新增 `src/channel_contract.rs`（7 项模块内单测）与 `tests/channel_codec_contract.rs`（10 项集成测试）：把 `system_channels.dart` 里「通道名 + 通道类型 + codec」的三元组冻结成编译期契约表，并让所有通道载荷按契约路由编码/解码，通道名正确但 codec 用错的情况从结构上不再可能。
+
+| Flutter 源码（3.50-candidate） | Opurom 对应 | 验证 |
+| --- | --- | --- |
+| `services/system_channels.dart:385-388` — `flutter/lifecycle` 是 `BasicMessageChannel<String?>` + `StringCodec` | `ChannelContract { kind: BasicMessage, codec: String }` | 只接受裸 UTF-8；标准 codec 字节被读成不同字符串，框架 `parse_lifecycle_message` 直接拒绝 |
+| `services/system_channels.dart:401-404` — `flutter/system` 是 `BasicMessageChannel<Object?>` + `JSONMessageCodec` | `ChannelContract { kind: BasicMessage, codec: Json }` | 产出 `{"type":"memoryPressure"}`，与 `channel_event_bridge::decode_system_message` 同一份字节 |
+| `services/system_channels.dart:181-184` — `flutter/platform` 是 `OptionalMethodChannel` + `JSONMethodCodec` | `ChannelContract { kind: Method{optional:true}, codec: Json }` | 方法调用编码为 `{"method":…,"args":…}`；缺 handler 仍是 null reply |
+| `services/system_channels.dart:423,430` + `services/platform_channel.dart:291-299` — `flutter/platform_views`/`_2` 是 `MethodChannel`，默认 `StandardMethodCodec` | `ChannelContract { kind: Method{optional:false}, codec: Standard }` | 方法调用首字节是字符串 tag；错误信封首字节是 1 |
+| `services/platform_channel.dart:202-256,622-633` — 基础消息通道与可选方法通道的 null 语义 | `encode/decode_channel_message`、`encode/decode_channel_envelope` | null 消息不上线（无字节），null reply 即 `MissingPlugin`；错配通道类型返回 typed `Unsupported` |
+| `services/message_codecs.dart:44-62,88-114,120-200,263-324,580-596` — 五种 codec 的线格式 | `ChannelCodec { Standard, Json, String }` | 跨 codec 互解必然失败：JSON 字节进不了标准通道，标准字节进不了 JSON 通道 |
+
+同时修正一处字节级偏差：`JSONMethodCodec.encodeMethodCall` 在 Flutter 里构造 `{'method': method, 'args': arguments}`，`JsonUtf8Encoder` 保留插入序，字节为 `method` 在前；原实现经通用 JSON 对象写出后键序被排序，现改为按 Flutter 插入序直接写字节（`src/framework_channels.rs`），并同步更新既有单测期望。
+
+第二十五轮审计的 `unused` 基线随之收敛：`flutter/lifecycle`、`flutter/platform`、`flutter/platform_views`、`flutter/platform_views_2` 四条通道名常量被契约表引用后不再是「已声明未接线」，`unused` 由 7 项降为 3 项。无渲染、IR、解释器改动，默认态零漂移。
+
 ## 六、验证与 CI
 
 - 命令：`cd opurom-platform && cargo fmt --all -- --check && cargo test --all-targets`。
-- 结果：2026-11-18 二十五轮本地全量通过；合计 133 个库单测 + 32 个集成测试组、共 371 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
-- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）；新增模块内单测 10 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
+- 结果：2026-11-18 二十六轮本地全量通过；合计 140 个库单测 + 33 个集成测试组、共 388 项测试全部通过（关键退出码：test=0 / fmt=0 / linux-check=0 / windows-check=0 / mac-check=0）。
+- 本模块新增测试文件：`tests/platform_channel.rs`（12）、`tests/native_capabilities.rs`（7）、`tests/event_code_dictionary_audit.rs`（8）、`tests/channel_codec_contract.rs`（10）；新增模块内单测 17 项；全部随 `cargo test --all-targets` 进入既有 CI 矩阵 `opurom-platform/.github/workflows/ci.yml`。
 
 ## 七、剩余 GAP（不得自行降标，按优先级继续）
 
@@ -303,4 +320,4 @@ GAP 说明：Flutter framework 未定义通用后台任务调度器，仅有后�
 4. **插件注册执行端**：`RegistrationPlan` 是冻结计划；`opurom-plugins` CLI 与 `opurom-cli` 各端工程生成尚未消费该计划。
 5. **跨仓库对齐**：`opurom-runtime-adapters` 的 9 类能力码与此处 12 类契约尚未统一命名，需 adapters 侧协同（本模块不修改他仓库代码）。
 6. **框架通道接线**（第二十五轮审计结论）：官方 24 条 `flutter/*` 框架通道中，桥接词表只覆盖 5 条；其余 19 条（`flutter/accessibility`、`flutter/backgesture`、`flutter/contextmenu`、`flutter/deferredcomponent`、`flutter/keyboard`、`flutter/keyevent`、`flutter/localization`、`flutter/menu`、`flutter/mousecursor`、`flutter/navigation`、`flutter/processtext`、`flutter/restoration`、`flutter/scribe`、`flutter/sensitivecontent`、`flutter/skia`、`flutter/spellcheck`、`flutter/status_bar`、`flutter/textinput`、`flutter/undomanager`）尚无 `flutter/` 同名通道。其中输入、IME、无障碍三类在本 crate 由 `input_bridge` / `ime` / `a11y` 自有 IR 路径承担，不走 Flutter 命名通道，其余需按宿主能力逐条评估后再决定是否建通道。
-7. **已声明未接线的通道名常量**：`system_channels::LIFECYCLE`、`PLATFORM`、`PLATFORM_VIEWS`、`PLATFORM_VIEWS_2` 与 `camera_methods::CHANNEL` 已冻结官方拼写，但生产通道表尚未引用；待宿主适配器建立 `ChannelTable` 时接入。
+7. **已声明未接线的通道名常量**：第二十六轮把 `system_channels::LIFECYCLE`、`PLATFORM`、`PLATFORM_VIEWS`、`PLATFORM_VIEWS_2` 接入 `channel_contract` 的编译期通道契约表，这四条已不再是未引用项；`camera_methods::CHANNEL` 仍只有声明、没有生产引用，待宿主适配器建立 `ChannelTable` 时接入。

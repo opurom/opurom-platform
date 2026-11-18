@@ -869,15 +869,13 @@ fn unused_codes_match_the_documented_baseline() {
     unused.sort();
 
     let expected = vec![
-        // Flutter models a missing handler as an exception kind, never as an
-        // error-envelope code, so this spelling is a kind-level label only.
-        "channel_name|unused|flutter/lifecycle".to_owned(),
-        "channel_name|unused|flutter/platform".to_owned(),
-        "channel_name|unused|flutter/platform_views".to_owned(),
-        "channel_name|unused|flutter/platform_views_2".to_owned(),
+        // The plugin channel name is declared but no production channel table
+        // references it yet.
         "channel_name|unused|plugins.flutter.io/camera".to_owned(),
         // Flutter declares tag 5 but never writes it.
         "codec_tag|unused|5 largeInt".to_owned(),
+        // Flutter models a missing handler as an exception kind, never as an
+        // error-envelope code, so this spelling is a kind-level label only.
         "error_code|unused|missing_plugin".to_owned(),
     ];
     assert_eq!(unused, expected);

@@ -182,12 +182,23 @@ pub fn decode_json_message(bytes: &[u8]) -> Result<Value, CodecError> {
 }
 
 /// `JSONMethodCodec.encodeMethodCall` (`message_codecs.dart:138-143`).
+///
+/// Flutter builds the two-key map as `{'method': method, 'args': arguments}`
+/// and `JsonUtf8Encoder` preserves map insertion order, so the bytes are
+/// written in that order rather than in the sorted order a generic JSON
+/// object writer would produce.
 pub fn encode_json_method_call(call: &MethodCall) -> Result<Vec<u8>, CodecError> {
-    let mut object = JsonMap::new();
-    object.insert("method".to_owned(), JsonValue::String(call.method.clone()));
-    object.insert("args".to_owned(), value_to_json(&call.arguments)?);
-    serde_json::to_vec(&JsonValue::Object(object))
-        .map_err(|_| CodecError::Unsupported("JSON method call encode failed"))
+    let method = serde_json::to_string(&JsonValue::String(call.method.clone()))
+        .map_err(|_| CodecError::Unsupported("JSON method call encode failed"))?;
+    let arguments = serde_json::to_string(&value_to_json(&call.arguments)?)
+        .map_err(|_| CodecError::Unsupported("JSON method call encode failed"))?;
+    let mut out = Vec::with_capacity(method.len() + arguments.len() + 20);
+    out.extend_from_slice(b"{\"method\":");
+    out.extend_from_slice(method.as_bytes());
+    out.extend_from_slice(b",\"args\":");
+    out.extend_from_slice(arguments.as_bytes());
+    out.push(b'}');
+    Ok(out)
 }
 
 /// `JSONMethodCodec.decodeMethodCall` (`message_codecs.dart:145-157`). A
@@ -468,7 +479,7 @@ mod tests {
         let bytes = encode_json_method_call(&call).unwrap();
         assert_eq!(
             String::from_utf8(bytes.clone()).unwrap(),
-            "{\"args\":{\"text\":\"hello\"},\"method\":\"Clipboard.setData\"}"
+            "{\"method\":\"Clipboard.setData\",\"args\":{\"text\":\"hello\"}}"
         );
         assert_eq!(decode_json_method_call(&bytes).unwrap(), call);
         assert_eq!(
