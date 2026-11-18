@@ -113,6 +113,8 @@ pub use viewport_layout::{layout_patch, LayoutPatch};
 pub use window_set::WindowSet;
 
 #[cfg(target_os = "macos")]
+pub use appkit::LifecycleObserver;
+#[cfg(target_os = "macos")]
 pub use appkit::{
     capture_window, draw_and_capture, window_availability, write_png, CapturedWindow, MacHost,
     MacHostDescriptor, MacWindow, WindowUnavailable,

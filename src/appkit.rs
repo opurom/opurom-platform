@@ -12,13 +12,22 @@
 use std::ffi::c_void;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::ptr::NonNull;
 
+use objc2::runtime::{NSObjectProtocol, ProtocolObject};
 use objc2::{rc::Retained, ClassType, MainThreadMarker};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSBitmapImageRep, NSScreen,
-    NSView, NSWindow, NSWindowStyleMask,
+    NSApplication, NSApplicationActivationPolicy, NSApplicationDidBecomeActiveNotification,
+    NSApplicationDidHideNotification, NSApplicationDidResignActiveNotification,
+    NSApplicationDidUnhideNotification, NSBackingStoreType, NSBitmapImageRep, NSScreen, NSView,
+    NSWindow, NSWindowDidBecomeKeyNotification, NSWindowDidDeminiaturizeNotification,
+    NSWindowDidMiniaturizeNotification, NSWindowDidResignKeyNotification, NSWindowStyleMask,
+    NSWindowWillCloseNotification,
 };
-use objc2_foundation::{NSDate, NSPoint, NSRect, NSRunLoop, NSSize};
+use objc2_foundation::{
+    NSDate, NSNotification, NSNotificationCenter, NSNotificationName, NSOperationQueue, NSPoint,
+    NSRect, NSRunLoop, NSSize,
+};
 use objc2_quartz_core::{CAMetalLayer, CATransaction};
 
 use crate::wayland_wire::WireEvent;
@@ -121,6 +130,37 @@ pub fn window_availability() -> Result<(), WindowUnavailable> {
         });
     }
     Ok(())
+}
+
+/// Push one lifecycle state through the shared transition synthesizer into
+/// the window's event queue. # Safety: `events` and `cursor` must point into
+/// a live `MacWindow` whose fields outlive this call.
+unsafe fn host_report_lifecycle(
+    events: *mut std::collections::VecDeque<crate::Lifecycle>,
+    cursor: *mut Option<crate::Lifecycle>,
+    state: crate::Lifecycle,
+) {
+    // SAFETY: single-threaded main-queue delivery; the window owns both.
+    let cursor = unsafe { &mut *cursor };
+    let changes = crate::app_lifecycle::transitions(*cursor, state);
+    if let Some(last) = changes.last() {
+        *cursor = Some(*last);
+    }
+    let queue = unsafe { &mut *events };
+    for change in changes {
+        queue.push_back(change);
+    }
+}
+
+/// The live notification observers for one window. Dropping this value
+/// removes every observer, so a closed window stops reporting lifecycle
+/// states.
+#[derive(Debug)]
+pub struct LifecycleObserver {
+    /// Keeps the registration alive; the tokens are never read again, but
+    /// dropping them removes the observers.
+    #[allow(dead_code)]
+    tokens: Vec<Retained<ProtocolObject<dyn NSObjectProtocol>>>,
 }
 
 /// Class names and window style of the real Objective-C host surface.
@@ -272,6 +312,8 @@ impl MacHost {
             view,
             layer,
             scale,
+            lifecycle_cursor: Some(crate::Lifecycle::Resumed),
+            lifecycle_events: std::collections::VecDeque::new(),
         })
     }
 }
@@ -319,12 +361,113 @@ pub struct MacWindow {
     layer: Retained<CAMetalLayer>,
     /// The window's backing scale at build time, as queued on `Scale`.
     scale: f32,
+    /// Lifecycle cursor for the window's own notifications. It starts from
+    /// `Resumed` because `makeKeyAndOrderFront` above already made this the
+    /// key window; the observers then track resign/become-key transitions.
+    lifecycle_cursor: Option<crate::Lifecycle>,
+    /// Events queued by the lifecycle observers between drains.
+    lifecycle_events: std::collections::VecDeque<crate::Lifecycle>,
 }
 
 impl MacWindow {
     /// The content scale this window was built with (its backing factor).
     pub fn scale(&self) -> f32 {
         self.scale
+    }
+
+    /// Observe the AppKit window and application notifications that map to
+    /// the five Flutter lifecycle states, queueing the same synthesized
+    /// intermediate transitions as the other hosts.
+    ///
+    /// Mapping (Flutter `services/binding.dart:448-457` state names, macOS
+    /// source notifications):
+    /// - `resumed` ← `NSApplicationDidBecomeActiveNotification` /
+    ///   `NSWindowDidBecomeKeyNotification`
+    /// - `inactive` ← `NSApplicationDidResignActiveNotification` /
+    ///   `NSWindowDidResignKeyNotification`
+    /// - `hidden` ← `NSApplicationDidHideNotification` /
+    ///   `NSWindowDidMiniaturizeNotification`
+    /// - `resumed` again ← `NSApplicationDidUnhideNotification` /
+    ///   `NSWindowDidDeminiaturizeNotification`
+    /// - `detached` ← `NSWindowWillCloseNotification`
+    ///
+    /// The observers live as long as the returned token; dropping it removes
+    /// them. Observers deliver on the main queue, where the host already
+    /// runs its event loop.
+    pub fn observe_lifecycle(&mut self) -> Result<LifecycleObserver, AdapterError> {
+        let events: *mut std::collections::VecDeque<crate::Lifecycle> = &mut self.lifecycle_events;
+        let cursor: *mut Option<crate::Lifecycle> = &mut self.lifecycle_cursor;
+        let center = NSNotificationCenter::defaultCenter();
+        let main = NSOperationQueue::mainQueue();
+        let mut tokens = Vec::new();
+        // SAFETY: every name below is a process-global `extern static` that
+        // stays valid for the program lifetime; the observers run on the main
+        // queue where the host's event loop already lives.
+        unsafe {
+            let push =
+                |name: &'static NSNotificationName,
+                 state: crate::Lifecycle,
+                 tokens: &mut Vec<Retained<ProtocolObject<dyn NSObjectProtocol>>>| {
+                    let block = block2::RcBlock::new(move |_note: NonNull<NSNotification>| {
+                        // SAFETY: the window owns the observer token and outlives
+                        // it, so the queue and cursor pointers stay valid.
+                        host_report_lifecycle(events, cursor, state);
+                    });
+                    let token = center.addObserverForName_object_queue_usingBlock(
+                        Some(name),
+                        None,
+                        Some(&main),
+                        &block,
+                    );
+                    tokens.push(token);
+                };
+            push(
+                NSApplicationDidBecomeActiveNotification,
+                crate::Lifecycle::Resumed,
+                &mut tokens,
+            );
+            push(
+                NSWindowDidBecomeKeyNotification,
+                crate::Lifecycle::Resumed,
+                &mut tokens,
+            );
+            push(
+                NSApplicationDidResignActiveNotification,
+                crate::Lifecycle::Inactive,
+                &mut tokens,
+            );
+            push(
+                NSWindowDidResignKeyNotification,
+                crate::Lifecycle::Inactive,
+                &mut tokens,
+            );
+            push(
+                NSApplicationDidHideNotification,
+                crate::Lifecycle::Hidden,
+                &mut tokens,
+            );
+            push(
+                NSWindowDidMiniaturizeNotification,
+                crate::Lifecycle::Hidden,
+                &mut tokens,
+            );
+            push(
+                NSApplicationDidUnhideNotification,
+                crate::Lifecycle::Resumed,
+                &mut tokens,
+            );
+            push(
+                NSWindowDidDeminiaturizeNotification,
+                crate::Lifecycle::Resumed,
+                &mut tokens,
+            );
+            push(
+                NSWindowWillCloseNotification,
+                crate::Lifecycle::Destroyed,
+                &mut tokens,
+            );
+        }
+        Ok(LifecycleObserver { tokens })
     }
     /// Read all retained handles; dropping this value releases the live window.
     #[allow(dead_code)]
@@ -335,6 +478,17 @@ impl MacWindow {
     /// Opaque pointer to the retained `CAMetalLayer` for the runtime GPU bridge.
     pub fn metal_layer_ptr(&self) -> *mut c_void {
         &*self.layer as *const CAMetalLayer as *mut c_void
+    }
+
+    /// Drain lifecycle transitions queued by the observers, FIFO. The host
+    /// feeds these into the same input stream as the other adapters.
+    pub fn drain_lifecycle(&mut self) -> Vec<crate::Lifecycle> {
+        self.lifecycle_events.drain(..).collect()
+    }
+
+    /// The last lifecycle state this window reported.
+    pub fn lifecycle(&self) -> Option<crate::Lifecycle> {
+        self.lifecycle_cursor
     }
 
     /// Let AppKit and Core Animation composite one presented drawable.

@@ -77,15 +77,19 @@ objc2-core-graphics = { version = "0.3.2", default-features = false, features = 
     "CGImage",
     "std",
 ] }
+block2 = "0.6.2"
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSArray",
     "NSAttributedString",
     "NSDate",
     "NSDictionary",
     "NSGeometry",
+    "NSNotification",
+    "NSOperation",
     "NSObject",
     "NSString",
     "NSRunLoop",
+    "block2",
     "objc2-core-foundation",
     "std",
 ] }

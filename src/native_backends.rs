@@ -35,7 +35,6 @@
 //! every target, and a platform that does not support a directory returns a
 //! typed `unimplemented` instead of a guessed path.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value as JsonValue};
@@ -641,6 +640,7 @@ pub unsafe fn image_picker_handler(state: *mut u8, call: &MethodCall) -> Reply {
 mod tests {
     use super::*;
     use crate::native_capabilities::{qualified, Capability, CapabilityTable};
+    use std::collections::BTreeMap;
 
     fn temp_dir(name: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
